@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audioTransfer"
+version = "2.0.0"
+description = "Organize and transfer audiobooks to Audiobookshelf"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+dependencies = []
+
+[project.optional-dependencies]
+ssh = ["paramiko"]
+
+[project.scripts]
+audiotransfer = "audiobook_transfer.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["audiobook_transfer*"]
