@@ -216,7 +216,17 @@ class NativeSSHTransferClient:
         success = transferred == len(all_files)
         if success:
             logger.info(f"  OK: {transferred}/{len(all_files)} files")
+            self._chmod_remote(remote_dir)
         return success
+
+    def _chmod_remote(self, remote_dir: str):
+        """Set 777 permissions on the remote directory for Audiobookshelf access."""
+        try:
+            cmd = self._build_ssh_cmd(f"chmod -R 777 {_escape_for_ssh(remote_dir)}")
+            subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            logger.debug(f"  chmod 777: {remote_dir}")
+        except Exception:
+            pass
 
     def verify_transfer(self, remote_subpath: str) -> Dict:
         result = {
@@ -308,6 +318,8 @@ class LocalTransferClient:
         success = transferred == len(all_files)
         if success:
             logger.info(f"  OK: {transferred}/{len(all_files)} files")
+            # Ensure Audiobookshelf can read transferred files
+            _chmod_local(local_dir)
         return success
 
     def verify_transfer(self, remote_subpath: str) -> Dict:
@@ -330,3 +342,17 @@ TRANSFER_CLIENTS = {
     "native-ssh": NativeSSHTransferClient,
     "local": LocalTransferClient,
 }
+
+
+def _chmod_local(path: Path):
+    """Set 777 permissions recursively on local directory for Audiobookshelf access."""
+    try:
+        os.chmod(path, 0o777)
+        for root, dirs, files in os.walk(path):
+            for d in dirs:
+                os.chmod(os.path.join(root, d), 0o777)
+            for f in files:
+                os.chmod(os.path.join(root, f), 0o777)
+        logger.debug(f"  chmod 777: {path}")
+    except Exception as e:
+        logger.debug(f"  chmod warning: {e}")

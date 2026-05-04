@@ -138,6 +138,8 @@ func (c *NativeSSHClient) TransferBook(audioFiles, coverFiles []string, targetSu
 	success := transferred == len(allFiles)
 	if success {
 		utils.Info.Printf("  OK: %d/%d files transferred", transferred, len(allFiles))
+		// chmod to ensure Audiobookshelf can read all transferred files
+		c.chmodRemoteDir(remoteDir)
 	} else {
 		utils.Warn.Printf("  Partial: %d/%d files transferred", transferred, len(allFiles))
 	}
@@ -231,6 +233,16 @@ func (c *NativeSSHClient) ensureRemoteDir(remotePath string) bool {
 	return true
 }
 
+func (c *NativeSSHClient) chmodRemoteDir(remotePath string) {
+	cmd := c.buildSSHCmd(fmt.Sprintf("chmod -R 777 %s", escapeSSH(remotePath)))
+	_, err := runCmd(cmd, 15*time.Second)
+	if err != nil {
+		utils.Warn.Printf("  chmod warning for %s: %v", remotePath, err)
+	} else {
+		utils.Debug.Printf("  chmod 777: %s", remotePath)
+	}
+}
+
 func (c *NativeSSHClient) transferFile(localFile, remoteDir string) bool {
 	cmd := c.buildSCPCmd(localFile, remoteDir)
 	_, err := runCmd(cmd, 10*time.Minute)
@@ -280,7 +292,7 @@ func (c *LocalClient) TransferBook(audioFiles, coverFiles []string, targetSubpat
 	localDir := filepath.Join(c.TargetBase, targetSubpath)
 	utils.Info.Printf("  Target: %s", localDir)
 
-	if err := os.MkdirAll(localDir, 0755); err != nil {
+	if err := os.MkdirAll(localDir, 0777); err != nil {
 		utils.Error.Printf("Failed to create local dir: %v", err)
 		return false
 	}
@@ -299,6 +311,14 @@ func (c *LocalClient) TransferBook(audioFiles, coverFiles []string, targetSubpat
 	success := transferred == len(allFiles)
 	if success {
 		utils.Info.Printf("  OK: %d/%d files copied", transferred, len(allFiles))
+		// Ensure Audiobookshelf can read transferred files
+		os.Chmod(localDir, 0777)
+		filepath.Walk(localDir, func(p string, info os.FileInfo, err error) error {
+			if err == nil {
+				os.Chmod(p, 0777)
+			}
+			return nil
+		})
 	}
 	return success
 }
