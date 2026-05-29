@@ -36,12 +36,20 @@ var regexPatterns = []pattern{
 	{regexp.MustCompile(`^\[(\d+)\]\s*(.+)$`),
 		map[string]int{"series_position": 1, "title": 2, "_conf": 60}},
 
+	// NN Title (no brackets)
+	{regexp.MustCompile(`^(\d+)\s+(.+)$`),
+		map[string]int{"series_position": 1, "title": 2, "_conf": 60}},
+
 	// Title [ASIN]
 	{regexp.MustCompile(`^(.+?)\s*\[([A-Z0-9]{10})\]$`),
 		map[string]int{"title": 1, "asin": 2, "_conf": 65}},
 
-	// Author - Title (standard, lower confidence since it catches everything)
-	{regexp.MustCompile(`^(.+?)\s*[-–—]\s*(.+)$`),
+	// Word NN - Title (series with position, e.g. "Pern 01 - Dragonflight")
+	{regexp.MustCompile(`^([A-Za-z]+)\s+(\d+(?:\.\d+)?)\s+[-–—]\s+(.+)$`),
+		map[string]int{"series": 1, "series_position": 2, "title": 3, "_conf": 80}},
+
+	// Author - Title (standard, lower confidence; requires space around dash to avoid kebab-case)
+	{regexp.MustCompile(`^(.+?)\s+[-–—]\s+(.+)$`),
 		map[string]int{"author": 1, "title": 2, "_conf": 70}},
 }
 
@@ -96,6 +104,84 @@ func ParseName(name string, parentName string) *models.ParsedInfo {
 
 	// Second pass: if regex gives us more info, use it
 	regexParse(clean, info)
+
+	// Post-process: inherit author from parent if parent looks like author name
+	if info.Author == "" && parentName != "" && !strings.Contains(parentName, "/") {
+		parentClean := parentName
+		authorToUse := parentName
+		// Handle comma-separated multi-author: "Caroline Peckham, Susanne Valenti"
+		// Use first author for inheritance check and as the author value
+		if strings.Contains(parentClean, ",") {
+			parentClean = strings.TrimSpace(strings.Split(parentClean, ",")[0])
+			authorToUse = parentClean
+		}
+		if isAuthorish(parentClean) && !isTitleLike(parentClean) {
+			words := strings.Fields(authorToUse)
+			if len(words) <= 4 {
+				info.Author = authorToUse
+				if info.Confidence < 45 {
+					info.Confidence = 45
+				}
+			}
+		}
+	}
+
+	// Post-process: extract series position from Volume/Vol NN anywhere in title, remove from title
+	if info.SeriesPosition == 0 && info.Title != "" {
+		volRe := regexp.MustCompile(`(?i)\s*(?:Volume|Vol\.?)\s*(\d+(?:\.\d+)?)`)
+		if loc := volRe.FindStringSubmatchIndex(info.Title); loc != nil {
+			if v, err := strconv.ParseFloat(info.Title[loc[2]:loc[3]], 64); err == nil {
+				info.SeriesPosition = v
+				// Remove volume text from title
+				info.Title = strings.TrimSpace(info.Title[:loc[0]] + info.Title[loc[1]:])
+				if info.Confidence < 55 {
+					info.Confidence = 55
+				}
+			}
+		}
+		// Also handle [Volume NN] bracketed
+		bracketRe := regexp.MustCompile(`(?i)\s*\[(?:Volume|Vol\.?)\s*(\d+(?:\.\d+)?)\]`)
+		if m := bracketRe.FindStringSubmatch(info.Title); m != nil && info.SeriesPosition == 0 {
+			if v, err := strconv.ParseFloat(m[1], 64); err == nil {
+				info.SeriesPosition = v
+				info.Title = bracketRe.ReplaceAllString(info.Title, "")
+				if info.Confidence < 55 {
+					info.Confidence = 55
+				}
+			}
+		}
+	}
+
+	// Post-process: clean up title after volume removal
+	if info.Title != "" {
+		// Remove trailing comma, dot, semicolon from volume removal artifacts
+		info.Title = strings.TrimRight(info.Title, " ,;.")
+		// Remove empty brackets
+		info.Title = regexp.MustCompile(`\[\s*\]`).ReplaceAllString(info.Title, "")
+		info.Title = strings.TrimSpace(info.Title)
+		// Strip [PZG] or similar release group tags from start
+		info.Title = regexp.MustCompile(`^\[[A-Z0-9]+\]\s*`).ReplaceAllString(info.Title, "")
+		info.Title = strings.TrimSpace(info.Title)
+		// Strip (Audiobook) (Unabridged) etc from end
+		info.Title = regexp.MustCompile(`(?i)\s*\((?:Audiobook|Unabridged|Unabr)\)`).ReplaceAllString(info.Title, "")
+		info.Title = regexp.MustCompile(`(?i)\s*\{[^}]*\}`).ReplaceAllString(info.Title, "") // {narrator} tags
+		info.Title = strings.TrimSpace(info.Title)
+	}
+
+	// Post-process: extract title from "Series NN - Title" pattern
+	if info.Series == "" && info.Title != "" {
+		seriesRe := regexp.MustCompile(`^(\w+)\s+(\d+(?:\.\d+)?)\s+[-–—]\s+(.+)$`)
+		if m := seriesRe.FindStringSubmatch(info.Title); m != nil {
+			info.Series = m[1]
+			if v, err := strconv.ParseFloat(m[2], 64); err == nil {
+				info.SeriesPosition = v
+			}
+			info.Title = m[3]
+			if info.Confidence < 65 {
+				info.Confidence = 65
+			}
+		}
+	}
 
 	// Post-processing
 	if info.Author != "" {
@@ -251,6 +337,32 @@ func parseParentContext(info *models.ParsedInfo, parentName string) {
 		}
 	}
 
+	// Try "Series (Author)" pattern from parent for series/author
+	if info.Series == "" || info.Author == "" {
+		if lastOpen := strings.LastIndex(parentName, "("); lastOpen >= 0 {
+			lastClose := strings.LastIndex(parentName, ")")
+			if lastClose > lastOpen {
+				before := strings.TrimSpace(parentName[:lastOpen])
+				parenContent := strings.TrimSpace(parentName[lastOpen+1 : lastClose])
+				if isAuthorish(parenContent) && !strings.Contains(before, " - ") {
+					if info.Author == "" {
+						info.Author = models.NormalizeAuthor(parenContent)
+						if info.Confidence < 50 {
+							info.Confidence = 50
+						}
+					}
+					if info.Series == "" && before != "" {
+						info.Series = before
+						if info.Confidence < 50 {
+							info.Confidence = 50
+						}
+					}
+					return
+				}
+			}
+		}
+	}
+
 	// Look for series keywords in parent name
 	keywordRe := regexp.MustCompile(`(?i)\s+(Series|Saga|Trilogy|Cycle|Chronicles|books\s+\d+)`)
 	keywordMatch := keywordRe.FindStringIndex(parentName)
@@ -260,33 +372,29 @@ func parseParentContext(info *models.ParsedInfo, parentName string) {
 		words := strings.Fields(before)
 
 		if len(words) > 0 {
-			var seriesWords []string
-
-			if info.Author == "" && len(words) >= 3 {
-				potentialAuthor := words[0] + " " + words[1]
-				info.Author = potentialAuthor
-				if info.Confidence < 35 {
-					info.Confidence = 35
-				}
-				seriesWords = words[2:]
-			} else if info.Author != "" {
-				authorWords := strings.Fields(info.Author)
-				if len(authorWords) < len(words) {
-					seriesWords = words[len(authorWords):]
-				}
-			} else {
-				if len(words) > 4 {
-					seriesWords = words[len(words)-4:]
-				} else {
-					seriesWords = words
+			// Don't extract author from parent if before looks like title (starts with The/A/An)
+			if info.Author == "" && len(words) >= 3 && len(words) <= 5 {
+				lower := strings.ToLower(before)
+				if !strings.HasPrefix(lower, "the ") && !strings.HasPrefix(lower, "a ") && !strings.HasPrefix(lower, "an ") {
+					potentialAuthor := words[0] + " " + words[1]
+					if isAuthorName(potentialAuthor) {
+						info.Author = potentialAuthor
+						if info.Confidence < 35 {
+							info.Confidence = 35
+						}
+						info.Series = strings.Join(words[2:], " ")
+						if info.Confidence < 40 {
+							info.Confidence = 40
+						}
+						return
+					}
 				}
 			}
 
-			if len(seriesWords) > 0 {
-				info.Series = strings.Join(seriesWords, " ")
-				if info.Confidence < 40 {
-					info.Confidence = 40
-				}
+			// Fallback: use entire before as series
+			info.Series = before
+			if info.Confidence < 40 {
+				info.Confidence = 40
 			}
 		}
 	}
@@ -345,6 +453,14 @@ func isAuthorName(s string) bool {
 	if strings.HasPrefix(lower, "the ") || strings.HasPrefix(lower, "a ") || strings.HasPrefix(lower, "an ") {
 		return false
 	}
+	// Reject strings containing digits (not author names)
+	for _, w := range words {
+		for _, c := range w {
+			if c >= '0' && c <= '9' {
+				return false
+			}
+		}
+	}
 	titleWordCount := 0
 	for _, w := range words {
 		lw := strings.ToLower(w)
@@ -356,11 +472,46 @@ func isAuthorName(s string) bool {
 		return false
 	}
 	for _, w := range words {
-		if len(w) > 12 {
+		if len(w) > 15 {
 			return false
 		}
 	}
 	return true
+}
+
+// isTitleLike checks if a string looks like a book title (not an author).
+// Used to prevent treating book titles as author names.
+func isTitleLike(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	lower := strings.ToLower(s)
+	// Titles often start with articles
+	if strings.HasPrefix(lower, "the ") || strings.HasPrefix(lower, "a ") || strings.HasPrefix(lower, "an ") {
+		return true
+	}
+	// Common title keywords
+	titleKeywords := []string{
+		"chronicles", "saga", "trilogy", "cycle", "series",
+		"of ", "and ", "in ", "on ", "at ", "the ",
+	}
+	keywordCount := 0
+	for _, kw := range titleKeywords {
+		if strings.Contains(lower, kw) {
+			keywordCount++
+		}
+	}
+	words := strings.Fields(s)
+	// Multi-word strings with many small words are likely titles
+	if len(words) >= 4 {
+		return true
+	}
+	// 3-word strings with at least one preposition/article likely title
+	if len(words) == 3 && keywordCount >= 1 {
+		return true
+	}
+	return keywordCount >= 2
 }
 
 // stripAllParens removes all parenthetical groups from a string.
@@ -393,3 +544,13 @@ func maxInt(a, b int) int {
 	}
 	return b
 }
+
+// Exported checks for use by the organizer.
+// IsAuthorLike returns true if the string looks like an author name.
+func IsAuthorLike(s string) bool { return isAuthorName(s) }
+
+// IsTitleLike returns true if the string looks like a book title.
+func IsTitleLike(s string) bool { return isTitleLike(s) }
+
+// IsAuthorish returns true if the string might be an author name (loose check).
+func IsAuthorish(s string) bool { return isAuthorish(s) }

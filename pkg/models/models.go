@@ -143,11 +143,21 @@ func SanitizeName(name string) string {
 // NormalizeAuthor converts "Last, First" to "First Last".
 func NormalizeAuthor(name string) string {
 	name = strings.TrimSpace(name)
-	if strings.Contains(name, ",") {
-		parts := strings.Split(name, ",")
-		if len(parts) == 2 {
-			return strings.TrimSpace(parts[1]) + " " + strings.TrimSpace(parts[0])
+	// Multi-author comma-separated: "Caroline Peckham, Susanne Valenti"
+	// Don't treat as "Last, First" — that's for single-author "Surname, Given" format
+	parts := strings.Split(name, ",")
+	if len(parts) == 2 {
+		first := strings.TrimSpace(parts[0])
+		second := strings.TrimSpace(parts[1])
+		// "Last, First" pattern has single word before comma and 1-2 words after
+		firstWords := strings.Fields(first)
+		secondWords := strings.Fields(second)
+		if len(firstWords) == 1 && len(secondWords) >= 1 && len(secondWords) <= 2 {
+			// Likely "Last, First" — reverse
+			return second + " " + first
 		}
+		// Likely multi-author — return as-is
+		return name
 	}
 	return name
 }

@@ -134,7 +134,8 @@ class NativeSSHTransferClient:
         if self.port != 22:
             cmd.extend(["-P", str(self.port)])
         cmd.append(str(local))
-        remote_part = _escape_for_ssh(f"{remote_dir.rstrip('/')}/")
+        # SCP not shell — pass path raw, subprocess handles spaces as single arg
+        remote_part = f"{remote_dir.rstrip('/')}/"
         cmd.append(f"{self.user}@{self.host}:{remote_part}")
         return cmd
 
@@ -189,7 +190,7 @@ class NativeSSHTransferClient:
         logger.info(f"  Transferring: {local_path.name} ({format_size(local_size)})")
         try:
             cmd = self._build_scp_cmd(local_path, remote_dir)
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
             return result.returncode == 0
         except subprocess.TimeoutExpired:
             logger.error(f"  Transfer timed out: {local_path.name}")

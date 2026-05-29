@@ -11,6 +11,7 @@ from .models import BookSource, BookIdentity, TransferResult, TransferReport
 from .transfer import (
     TRANSFER_CLIENTS, TRANSFER_METHODS,
     NativeSSHTransferClient, LocalTransferClient,
+    DEFAULT_HOST, DEFAULT_TARGET_BASE,
     format_size,
 )
 from .utils import logger, sanitize_name
@@ -144,6 +145,9 @@ def run_transfer(source_dir: Path, *, dry_run: bool = False,
             parent_name = book.path.name
         else:
             parent_name = book.path.parent.name
+        # Skip source dir itself as parent context (eg "qbit" not an author)
+        if parent_name == source_dir.name:
+            parent_name = ""
 
         parsed = parse_name(book.name, parent_name=parent_name)
 
@@ -235,14 +239,15 @@ def run_transfer(source_dir: Path, *, dry_run: bool = False,
     # Phase 5: Verify (if requested)
     if verify and not dry_run:
         print(f"\n[5/5] Verifying transfers...")
-        _verify_transfers(report)
+        _verify_transfers(report, host=host, target_base=target_base, ssh_key_path=ssh_key_path)
 
     _cleanup_persistent_temp()
 
     print(f"\n[DONE] Transfer complete!")
     report.print_summary()
 
-    # Count failures
+    # Count failures (reset: verify already incremented)
+    report.failed = 0
     for r in report.results:
         if r.status == 'failed':
             report.failed += 1
@@ -254,13 +259,16 @@ def run_transfer(source_dir: Path, *, dry_run: bool = False,
     return report
 
 
-def _verify_transfers(report: TransferReport):
+def _verify_transfers(report: TransferReport, host: str = DEFAULT_HOST, target_base: str = DEFAULT_TARGET_BASE, ssh_key_path: Optional[str] = None):
     """Verify transferred files exist on target."""
     for r in report.results:
         if r.status in ('transferred', 'local') and r.identity:
             if r.method_used and r.method_used in TRANSFER_CLIENTS:
                 client_class = TRANSFER_CLIENTS[r.method_used]
-                client = client_class()
+                if r.method_used == "native-ssh":
+                    client = client_class(host=host, target_base=target_base, ssh_key_path=ssh_key_path)
+                else:
+                    client = client_class(target_base=target_base)
                 v = client.verify_transfer(r.identity.target_path)
             else:
                 v = {"path": "", "exists": False, "files": [], "total_size": 0}
@@ -270,11 +278,12 @@ def _verify_transfers(report: TransferReport):
                       f"{format_size(v['total_size'])})")
             else:
                 print(f"  MISSING: {v.get('path', r.identity.target_path)}")
+                original_status = r.status
                 r.status = "failed"
                 r.error = f"Verification failed: {v.get('error', 'unknown')}"
-                if r.status == 'transferred' and report.transferred > 0:
+                if original_status == 'transferred' and report.transferred > 0:
                     report.transferred -= 1
-                elif r.status == 'local' and report.local > 0:
+                elif original_status == 'local' and report.local > 0:
                     report.local -= 1
                 report.failed += 1
 

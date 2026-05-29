@@ -39,12 +39,19 @@ def sanitize_name(name: str, max_len: int = 200) -> str:
 
 
 def normalize_author(name: str) -> str:
-    """Normalize author: 'Last, First' -> 'First Last'"""
+    """Normalize author: 'Last, First' -> 'First Last'
+    Preserves multi-author format: 'Caroline Peckham, Susanne Valenti' stays unchanged.
+    """
     name = name.strip()
     if ',' in name:
         parts = [p.strip() for p in name.split(',')]
         if len(parts) == 2:
-            return f'{parts[1]} {parts[0]}'
+            first, second = parts[0], parts[1]
+            # "Last, First" pattern: single word before comma
+            if len(first.split()) == 1 and 1 <= len(second.split()) <= 2:
+                return f'{second} {first}'
+            # Multi-author: keep as-is
+            return name
     return name
 
 

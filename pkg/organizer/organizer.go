@@ -16,6 +16,8 @@ import (
 	"github.com/jevonx/audioTransfer/pkg/utils"
 )
 
+
+
 // Config holds the pipeline configuration.
 type Config struct {
 	SourceDir   string
@@ -68,6 +70,10 @@ func RunTransfer(cfg Config) *models.TransferReport {
 			parentName = filepath.Base(book.Path)
 		} else {
 			parentName = filepath.Base(filepath.Dir(book.Path))
+		}
+		// Skip source dir itself as parent context (eg "qbit" not an author)
+		if parentName == filepath.Base(cfg.SourceDir) {
+			parentName = ""
 		}
 
 		// Pass parent name for parsing context
@@ -200,6 +206,13 @@ func RunTransfer(cfg Config) *models.TransferReport {
 				result.Error = "Transfer failed"
 			}
 
+			// Remove old results for same book (replaces, not duplicates)
+			for i, r := range report.Results {
+				if r.SourceName == m.book.Name {
+					report.Results = append(report.Results[:i], report.Results[i+1:]...)
+					break
+				}
+			}
 			report.Results = append(report.Results, result)
 
 			if success {
@@ -237,10 +250,29 @@ func RunTransfer(cfg Config) *models.TransferReport {
 		}
 	}
 
-	// Count remaining failures
-	for _, r := range report.Results {
-		if r.Status == "failed" {
-			report.Failed++
+	// Phase 5: Verify (if requested)
+	if cfg.Verify && !cfg.DryRun {
+		fmt.Printf("\n[5/5] Verifying transfers...\n")
+		verifyTransfers(report, cfg)
+	}
+
+	// Count failures — only if book has no success result (verify already incremented failed, reset here)
+	report.Failed = 0
+	for _, m := range matched {
+		hasSuccess := false
+		for _, r := range report.Results {
+			if r.SourceName == m.book.Name && (r.Status == "transferred" || r.Status == "local") {
+				hasSuccess = true
+				break
+			}
+		}
+		if !hasSuccess {
+			for _, r := range report.Results {
+				if r.SourceName == m.book.Name && r.Status == "failed" {
+					report.Failed++
+					break
+				}
+			}
 		}
 	}
 
@@ -254,6 +286,49 @@ func RunTransfer(cfg Config) *models.TransferReport {
 	}
 
 	return report
+}
+
+// verifyTransfers verifies transferred files exist on target.
+func verifyTransfers(report *models.TransferReport, cfg Config) {
+	for _, r := range report.Results {
+		if r.Status != "transferred" && r.Status != "local" {
+			continue
+		}
+		if r.Identity == nil {
+			continue
+		}
+
+		method := r.MethodUsed
+		if method == "" {
+			continue
+		}
+
+		client := transfer.NewClient(method, cfg.Host, cfg.TargetBase, cfg.SSHKeyPath, 22)
+		v := client.VerifyTransfer(r.Identity.TargetPath())
+
+		if exists, ok := v["exists"].(bool); ok && exists {
+			files, _ := v["files"].([]map[string]interface{})
+			totalSize, _ := v["total_size"].(int64)
+			fmt.Printf("  OK: %s (%d files, %s)\n", v["path"], len(files), transfer.FormatSize(totalSize))
+		} else {
+			errMsg := "unknown"
+			if e, ok := v["error"].(string); ok {
+				errMsg = e
+			}
+			fmt.Printf("  MISSING: %s (%s)\n", r.Identity.TargetPath(), errMsg)
+
+			originalStatus := r.Status
+			r.Status = "failed"
+			r.Error = fmt.Sprintf("Verification failed: %s", errMsg)
+
+			if originalStatus == "transferred" && report.Transferred > 0 {
+				report.Transferred--
+			} else if originalStatus == "local" && report.Local > 0 {
+				report.Local--
+			}
+			report.Failed++
+		}
+	}
 }
 
 // resolveIdentity resolves a book identity from parsed info + optional API enrichment.
@@ -293,8 +368,8 @@ func resolveIdentity(parsed *models.ParsedInfo, book *models.BookSource, cfg Con
 
 	// Fallbacks
 	if identity.Author == "" && book.Name != "" {
-		// Try parsing parent dir for author context
-		authorFromParent := extractAuthorFromPath(book.Path)
+		// Try parsing parent dir for author context (exclude source dir itself)
+		authorFromParent := extractAuthorFromPath(book.Path, cfg.SourceDir)
 		if authorFromParent != "" {
 			identity.Author = authorFromParent
 			identity.Confidence = max(identity.Confidence, 25)
@@ -327,15 +402,57 @@ func resolveIdentity(parsed *models.ParsedInfo, book *models.BookSource, cfg Con
 }
 
 // extractAuthorFromPath tries to determine an author from the directory path structure.
-func extractAuthorFromPath(path string) string {
-	// Walk up from the file: audioTransfer/qbit/Author - Title/file.m4b
-	// The grandparent of the audio file often contains author info
+// Walks up the directory tree from deepest level, finds first author-like directory.
+// Stops at the source directory boundary to avoid picking up source dir name as author.
+func extractAuthorFromPath(path string, sourceDir string) string {
+	sourceDir = filepath.Clean(sourceDir)
 	dir := filepath.Dir(path)
-	parent := filepath.Base(dir)
-	if idx := strings.Index(parent, " - "); idx >= 0 {
-		return strings.TrimSpace(parent[:idx])
+	parts := strings.Split(dir, string(filepath.Separator))
+	sourceParts := strings.Split(sourceDir, string(filepath.Separator))
+
+	for i := len(parts) - 1; i >= 0; i-- {
+		segment := strings.TrimSpace(parts[i])
+		if segment == "" || segment == "." || segment == "/" || segment == "audiobooks" || segment == "audiobook" {
+			continue
+		}
+		// Stop at source directory boundary
+		if i < len(sourceParts) && parts[i] == sourceParts[i] {
+			// Check if we've reached the source dir prefix
+			match := true
+			for j := i; j < min(len(parts), len(sourceParts)); j++ {
+				if parts[j] != sourceParts[j] {
+					match = false
+					break
+				}
+			}
+			if match {
+				break
+			}
+		}
+		// Skip segments that look like titles (e.g. series names)
+		if parser.IsTitleLike(segment) {
+			continue
+		}
+		// Check if this segment is directly an author name
+		if parser.IsAuthorLike(segment) {
+			return segment
+		}
+		// Check " - " pattern: "Author - Title" where author is before dash
+		if idx := strings.Index(segment, " - "); idx >= 0 {
+			potentialAuthor := strings.TrimSpace(segment[:idx])
+			if parser.IsAuthorish(potentialAuthor) && !parser.IsTitleLike(potentialAuthor) {
+				return potentialAuthor
+			}
+		}
 	}
 	return ""
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (c Config) lookupMetadata() bool {

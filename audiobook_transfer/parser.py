@@ -20,12 +20,20 @@ PATTERNS = [
     (r'^(.+?)\s*[-–—]\s*(.+?)\s*\[([A-Z0-9]{10})\]$',
      {'author': 1, 'title': 2, 'asin': 3, 'confidence': 85}),
 
-    # Author - Title (standard, lower confidence since it catches everything)
-    (r'^(.+?)\s*[-–—]\s*(.+)$',
+    # Word NN - Title (series with position, e.g. "Pern 01 - Dragonflight")
+    (r'^([A-Za-z]+)\s+(\d+(?:\.\d+)?)\s+[-–—]\s+(.+)$',
+     {'series': 1, 'series_position': 2, 'title': 3, 'confidence': 80}),
+
+    # Author - Title (standard, lower confidence; requires space around dash)
+    (r'^(.+?)\s+[-–—]\s+(.+)$',
      {'author': 1, 'title': 2, 'confidence': 70}),
 
     # [NN] Title (numbered series entry)
     (r'^\[(\d+)\]\s*(.+)$',
+     {'series_position': 1, 'title': 2, 'confidence': 60}),
+
+    # NN Title (no brackets, numbered series entry)
+    (r'^(\d+)\s+(.+)$',
      {'series_position': 1, 'title': 2, 'confidence': 60}),
 
     # Title [ASIN]
@@ -98,13 +106,43 @@ def is_author_name(s: str) -> bool:
     lower = s.lower()
     if lower.startswith('the ') or lower.startswith('a ') or lower.startswith('an '):
         return False
+    # Reject strings containing digits (not author names)
+    for w in words:
+        for c in w:
+            if c.isdigit():
+                return False
     title_word_count = sum(1 for w in words if w.lower() in TITLE_WORDS)
     if len(words) > 2 and title_word_count / len(words) > 0.3:
         return False
     for w in words:
-        if len(w) > 12:
+        if len(w) > 15:
             return False
     return True
+
+
+def is_title_like(s: str) -> bool:
+    """Check if a string looks like a book title (not an author)."""
+    s = s.strip()
+    if not s:
+        return False
+    lower = s.lower()
+    # Titles often start with articles
+    if lower.startswith('the ') or lower.startswith('a ') or lower.startswith('an '):
+        return True
+    # Common title keywords
+    title_keywords = [
+        'chronicles', 'saga', 'trilogy', 'cycle', 'series',
+        'of ', 'and ', 'in ', 'on ', 'at ', 'the ',
+    ]
+    keyword_count = sum(1 for kw in title_keywords if kw in lower)
+    words = s.split()
+    # Multi-word strings with many small words are likely titles
+    if len(words) >= 4:
+        return True
+    # 3-word strings with at least one preposition/article likely title
+    if len(words) == 3 and keyword_count >= 1:
+        return True
+    return keyword_count >= 2
 
 
 def heuristic_parse(clean: str, info: ParsedInfo):
@@ -224,6 +262,22 @@ def parse_parent_context(info: ParsedInfo, parent_name: Optional[str]):
             info.confidence = max(info.confidence, 40)
             logger.debug(f"  Author from parent: '{info.author}'")
 
+    # Try "Series (Author)" pattern from parent
+    if not info.series or not info.author:
+        last_open = parent_name.rfind('(')
+        if last_open >= 0:
+            last_close = parent_name.rfind(')')
+            if last_close > last_open:
+                before = parent_name[:last_open].strip()
+                paren = parent_name[last_open + 1:last_close].strip()
+                if is_authorish(paren) and ' - ' not in before:
+                    if not info.author:
+                        info.author = normalize_author(paren)
+                        info.confidence = max(info.confidence, 50)
+                    if not info.series and before:
+                        info.series = before
+                        info.confidence = max(info.confidence, 50)
+
     # Look for series keywords in parent name
     keyword_match = re.search(
         r'\s+(Series|Saga|Trilogy|Cycle|Chronicles|books\s+\d+)\b',
@@ -235,21 +289,24 @@ def parse_parent_context(info: ParsedInfo, parent_name: Optional[str]):
         words = before.split()
 
         if words:
-            if not info.author and len(words) >= 3:
+            # Don't extract author from parent if before starts with The/A/An
+            lower_before = before.lower()
+            if not info.author and len(words) >= 3 and len(words) <= 5 \
+                    and not lower_before.startswith('the ') \
+                    and not lower_before.startswith('a ') \
+                    and not lower_before.startswith('an '):
                 potential_author = ' '.join(words[:2])
-                info.author = potential_author
-                info.confidence = max(info.confidence, 35)
-                series_words = words[2:]
-            elif info.author:
-                author_len = len(info.author.split())
-                series_words = words[author_len:]
-            else:
-                series_words = words[-min(4, len(words)):]
+                if is_author_name(potential_author):
+                    info.author = potential_author
+                    info.confidence = max(info.confidence, 35)
+                    info.series = ' '.join(words[2:])
+                    info.confidence = max(info.confidence, 40)
+                    return
 
-            if series_words:
-                info.series = ' '.join(series_words)
-                info.confidence = max(info.confidence, 40)
-                logger.debug(f"  Series from parent: '{info.series}'")
+            # Fallback: use entire before as series
+            info.series = before
+            info.confidence = max(info.confidence, 40)
+            logger.debug(f"  Series from parent: '{info.series}'")
 
 
 def extract_asin(clean: str, info: ParsedInfo):
@@ -289,6 +346,50 @@ def parse_name(name: str, parent_name: Optional[str] = None) -> ParsedInfo:
 
     # Pass 2: Regex parsing (may override heuristic if higher confidence)
     regex_parse(clean, info)
+
+    # Post-process: inherit author from parent if parent looks like author name
+    if not info.author and parent_name:
+        parent = parent_name
+        author_to_use = parent_name
+        if ',' in parent:
+            parent = parent.split(',')[0].strip()
+            author_to_use = parent
+        if is_authorish(parent) and not is_title_like(parent):
+            words = author_to_use.split()
+            if len(words) <= 4:
+                info.author = author_to_use
+                info.confidence = max(info.confidence, 45)
+
+    # Post-process: extract series position from Volume/Vol NN
+    if info.series_position is None and info.title:
+        vol_match = re.search(r'(?i)\s*(?:Volume|Vol\.?)\s*(\d+(?:\.\d+)?)', info.title)
+        if vol_match:
+            info.series_position = float(vol_match.group(1))
+            info.title = (info.title[:vol_match.start()] + info.title[vol_match.end():]).strip()
+            info.confidence = max(info.confidence, 55)
+        else:
+            bracket_match = re.search(r'(?i)\s*\[(?:Volume|Vol\.?)\s*(\d+(?:\.\d+))\]', info.title)
+            if bracket_match:
+                info.series_position = float(bracket_match.group(1))
+                info.title = re.sub(r'(?i)\s*\[(?:Volume|Vol\.?)\s*\d+(?:\.\d+)\]', '', info.title).strip()
+                info.confidence = max(info.confidence, 55)
+
+    # Clean up title after volume removal
+    if info.title:
+        info.title = info.title.rstrip(' ,;.')
+        info.title = re.sub(r'\[\s*\]', '', info.title).strip()
+        info.title = re.sub(r'^\[[A-Z0-9]+\]\s*', '', info.title).strip()
+        info.title = re.sub(r'(?i)\s*\((?:Audiobook|Unabridged|Unabr)\)', '', info.title).strip()
+        info.title = re.sub(r'(?i)\s*\{[^}]*\}', '', info.title).strip()
+
+    # Post-process: extract title from "Series NN - Title" pattern
+    if not info.series and info.title:
+        series_match = re.match(r'^(\w+)\s+(\d+(?:\.\d+)?)\s+[-–—]\s+(.+)$', info.title)
+        if series_match:
+            info.series = series_match.group(1)
+            info.series_position = float(series_match.group(2))
+            info.title = series_match.group(3)
+            info.confidence = max(info.confidence, 65)
 
     # Post-processing
     if info.author:

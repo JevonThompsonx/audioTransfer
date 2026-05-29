@@ -5,6 +5,7 @@ package transfer
 import (
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,12 +124,12 @@ func (c *NativeSSHClient) TransferBook(audioFiles, coverFiles []string, targetSu
 
 	transferred := 0
 	for _, f := range allFiles {
-		if _, err := os.Stat(f); err != nil {
+		fi, err := os.Stat(f)
+		if err != nil {
 			utils.Warn.Printf("  File not found: %s", f)
 			continue
 		}
-		fi, _ := os.Stat(f)
-		utils.Info.Printf("  Transferring: %s (%s)", filepath.Base(f), formatSize(fi.Size()))
+		utils.Info.Printf("  Transferring: %s (%s)", filepath.Base(f), FormatSize(fi.Size()))
 
 		if c.transferFile(f, remoteDir) {
 			transferred++
@@ -218,7 +219,9 @@ func (c *NativeSSHClient) buildSCPCmd(localFile, remoteDir string) []string {
 	if c.Port != 22 {
 		cmd = append(cmd, "-P", fmt.Sprintf("%d", c.Port))
 	}
-	cmd = append(cmd, localFile, fmt.Sprintf("%s@%s:%s/", c.User, c.Host, escapeSSH(strings.TrimRight(remoteDir, "/"))))
+	// SCP not shell — pass path raw, exec.Command handles spaces as single argv
+	remoteTarget := strings.TrimRight(remoteDir, "/") + "/"
+	cmd = append(cmd, localFile, fmt.Sprintf("%s@%s:%s", c.User, c.Host, remoteTarget))
 	return cmd
 }
 
@@ -245,7 +248,7 @@ func (c *NativeSSHClient) chmodRemoteDir(remotePath string) {
 
 func (c *NativeSSHClient) transferFile(localFile, remoteDir string) bool {
 	cmd := c.buildSCPCmd(localFile, remoteDir)
-	_, err := runCmd(cmd, 10*time.Minute)
+	_, err := runCmd(cmd, 30*time.Minute)
 	if err != nil {
 		utils.Error.Printf("  Failed to transfer %s: %v", filepath.Base(localFile), err)
 		return false
@@ -375,18 +378,14 @@ func NewClient(method, host, targetBase, sshKeyPath string, port int) TransferCl
 // --- Helpers ---
 
 func checkHostname(host string, port int) (bool, string) {
-	// Simple TCP dial check
-	cmd := exec.Command("nc", "-z", "-w", "5", host, fmt.Sprintf("%d", port))
-	err := cmd.Run()
+	addrs, err := net.LookupHost(host)
 	if err != nil {
-		// Try ping as fallback
-		pingCmd := exec.Command("ping", "-c", "1", "-W", "3", host)
-		if pingErr := pingCmd.Run(); pingErr != nil {
-			return false, fmt.Sprintf("Host %s not reachable", host)
-		}
-		return true, fmt.Sprintf("Host %s reachable via ping", host)
+		return false, fmt.Sprintf("Cannot resolve hostname: %s (DNS failed)", host)
 	}
-	return true, fmt.Sprintf("Host %s:%d reachable", host, port)
+	if len(addrs) == 0 {
+		return false, fmt.Sprintf("Cannot resolve hostname: %s (no addresses)", host)
+	}
+	return true, fmt.Sprintf("Resolved %s to %s", host, addrs[0])
 }
 
 func runCmd(args []string, timeout time.Duration) (string, error) {
@@ -450,7 +449,7 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-func formatSize(bytes int64) string {
+func FormatSize(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
 		return fmt.Sprintf("%d B", bytes)
