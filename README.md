@@ -29,8 +29,8 @@ audiotransfer [options]
 
 Options:
   --source, -s     Source directory (default: ~/qbit)
-  --host, -H       Remote hostname (default: audiobookshelf)
-  --target, -t     Remote target path (default: /audiobooks)
+  --host, -H       Remote hostname (default: roadman)
+  --target, -t     Remote target path (default: /mnt/media/audiobooks)
   --ssh-key, -k    SSH private key path (auto-detected if unset)
   --dry-run, -n    Preview plan without transferring
   --local, -L      Local copy only, no SSH
@@ -51,7 +51,7 @@ Options:
 ./audiotransfer --source ~/qbit --local --target ~/organized
 
 # Full transfer: organize and send to server via SSH
-./audiotransfer --source ~/qbit --host audiobookshelf --verify
+./audiotransfer --source ~/qbit --host roadman --verify
 
 # Interactive mode: confirm each book match
 ./audiotransfer --source ~/qbit --interactive
@@ -97,7 +97,7 @@ Before (flat source directory):
 
 After (organized):
 ```
-/audiobooks/
+/mnt/media/audiobooks/         ← host path bound into Audiobookshelf as /audiobooks
   Author/
     Title/
       Author - Title.m4b
@@ -124,6 +124,7 @@ The hybrid parser handles these naming conventions:
 | `[NN] Title` | `[03] Royal Assassin.m4b` | Position, Title |
 | **Heuristic: `Series (Author)`** | `Realm of the Elderlings (Robin Hobb)/` | Author = Robin Hobb, Series = Realm of the Elderlings |
 | **Heuristic: `Title - Author` (reverse)** | `The Shining - Stephen King.m4b` | Detects reverse pattern, assigns correctly |
+| **`Series_Title -- Subtitle [ASIN]`** | `Embodied Activism_ Engaging the Body...--A Practical Guide... [B0BFJRTQNF].m4b` | Series = "Embodied Activism", Title parsed, ASIN extracted |
 
 ### Series Inheritance
 
@@ -149,7 +150,7 @@ Realm of the Elderlings (Robin Hobb)/     ← Author: Robin Hobb, Series: Realm 
 - Always available — no dependencies
 - Use `rsync` afterwards for manual transfer:
   ```bash
-  rsync -avzP ~/qbit/organized/ root@audiobookshelf:/audiobooks/
+  rsync -avzP ~/qbit/organized/ root@roadman:/mnt/media/audiobooks/
   ```
 
 ### Fallback Chain

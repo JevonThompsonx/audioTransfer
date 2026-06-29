@@ -115,8 +115,8 @@ def _try_transfer_method(client, books_with_ids, report, method_name: str) -> bo
 
 
 def run_transfer(source_dir: Path, *, dry_run: bool = False,
-                 interactive: bool = True, host: str = "audiobookshelf",
-                 target_base: str = "/audiobooks", force: bool = False,
+                 interactive: bool = True, host: str = "roadman",
+                 target_base: str = "/mnt/media/audiobooks", force: bool = False,
                  verify: bool = False, ssh_key_path: Optional[str] = None,
                  local_only: bool = False,
                  methods: Optional[List[str]] = None) -> TransferReport:

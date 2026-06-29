@@ -28,8 +28,17 @@ var regexPatterns = []pattern{
 	{regexp.MustCompile(`^(.+?)\s*[-–—]\s*(.+?),\s*Book\s*([\d.]+)$`),
 		map[string]int{"author": 1, "series": 2, "series_position": 3, "_conf": 80}},
 
-	// Author - Title [ASIN]
-	{regexp.MustCompile(`^(.+?)\s*[-–—]\s*(.+?)\s*\[([A-Z0-9]{10})\]$`),
+	// Series_Title -- Subtitle [ASIN] (no author)
+	// Matches when the "author" group would be too long to be a real name.
+	{regexp.MustCompile(`^(.{1,50}?)_\s*(.+?)\s*[-–—]{1,2}\s*(.+?)\s*\[([A-Z0-9]{10})\]$`),
+		map[string]int{"series": 1, "title": 2, "_conf": 75, "_subtitle_skip": 3, "asin": 4}},
+
+	// Series_Title [ASIN] (no author, no subtitle)
+	{regexp.MustCompile(`^(.{1,50}?)_\s*(.+?)\s*\[([A-Z0-9]{10})\]$`),
+		map[string]int{"series": 1, "title": 2, "asin": 3, "_conf": 70}},
+
+	// Author - Title [ASIN] (author constrained to a reasonable name length)
+	{regexp.MustCompile(`^(.{1,40}?)\s*[-–—]\s*(.+?)\s*\[([A-Z0-9]{10})\]$`),
 		map[string]int{"author": 1, "title": 2, "asin": 3, "_conf": 85}},
 
 	// [NN] Title (numbered series entry)
@@ -105,22 +114,28 @@ func ParseName(name string, parentName string) *models.ParsedInfo {
 	// Second pass: if regex gives us more info, use it
 	regexParse(clean, info)
 
-	// Post-process: inherit author from parent if parent looks like author name
+	// Post-process: inherit author from parent if parent looks like author name.
+	// Skip if the series was already set and matches the parent name (avoids
+	// duplicating a series name as the author for "Series_Title ..." filenames).
 	if info.Author == "" && parentName != "" && !strings.Contains(parentName, "/") {
-		parentClean := parentName
-		authorToUse := parentName
-		// Handle comma-separated multi-author: "Caroline Peckham, Susanne Valenti"
-		// Use first author for inheritance check and as the author value
-		if strings.Contains(parentClean, ",") {
-			parentClean = strings.TrimSpace(strings.Split(parentClean, ",")[0])
-			authorToUse = parentClean
-		}
-		if isAuthorish(parentClean) && !isTitleLike(parentClean) {
-			words := strings.Fields(authorToUse)
-			if len(words) <= 4 {
-				info.Author = authorToUse
-				if info.Confidence < 45 {
-					info.Confidence = 45
+		if info.Series != "" && strings.EqualFold(strings.TrimSpace(info.Series), strings.TrimSpace(parentName)) {
+			// Parent is already represented as the series — do not also use it as author.
+		} else {
+			parentClean := parentName
+			authorToUse := parentName
+			// Handle comma-separated multi-author: "Caroline Peckham, Susanne Valenti"
+			// Use first author for inheritance check and as the author value
+			if strings.Contains(parentClean, ",") {
+				parentClean = strings.TrimSpace(strings.Split(parentClean, ",")[0])
+				authorToUse = parentClean
+			}
+			if isAuthorish(parentClean) && !isTitleLike(parentClean) {
+				words := strings.Fields(authorToUse)
+				if len(words) <= 4 {
+					info.Author = authorToUse
+					if info.Confidence < 45 {
+						info.Confidence = 45
+					}
 				}
 			}
 		}
@@ -281,7 +296,13 @@ func regexParse(clean string, info *models.ParsedInfo) {
 		for fieldName, groupIdx := range p.mapping {
 			if fieldName == "_conf" {
 				info.Confidence = maxInt(info.Confidence, groupIdx)
-			} else if groupIdx < len(match) {
+				continue
+			}
+			if strings.HasPrefix(fieldName, "_") {
+				// Internal placeholder (e.g. _subtitle_skip) — ignore.
+				continue
+			}
+			if groupIdx < len(match) {
 				value := strings.TrimSpace(match[groupIdx])
 				switch fieldName {
 				case "title":

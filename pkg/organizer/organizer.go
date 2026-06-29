@@ -342,7 +342,10 @@ func resolveIdentity(parsed *models.ParsedInfo, book *models.BookSource, cfg Con
 		MetadataSources: []string{"filename"},
 	}
 
-	if parsed.Author == "" && parsed.Series != "" {
+	// Only fall back to "series as title" when the parser produced no title.
+	// Previously this triggered whenever the author was unknown, which clobbered
+	// real titles for files like "Series_Title -- Subtitle [ASIN]".
+	if parsed.Author == "" && parsed.Series != "" && identity.Title == "" {
 		identity.Title = parsed.Series
 		identity.Confidence = max(identity.Confidence, 50)
 	}

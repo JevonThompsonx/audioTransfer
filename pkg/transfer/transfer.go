@@ -16,11 +16,13 @@ import (
 )
 
 // Default connection settings.
+// roadman is the host that runs the Audiobookshelf docker container.
+// /mnt/media/audiobooks is the HOST path bind-mounted into the container as /audiobooks.
 const (
-	DefaultHost       = "audiobookshelf"
+	DefaultHost       = "roadman"
 	DefaultPort       = 22
 	DefaultUser       = "root"
-	DefaultTargetBase = "/audiobooks"
+	DefaultTargetBase = "/mnt/media/audiobooks"
 )
 
 // Transfer methods in priority order.

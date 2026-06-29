@@ -16,8 +16,10 @@ def resolve_identity(parsed: ParsedInfo,
     series_pos = parsed.series_position
     confidence = parsed.confidence
 
-    # If we got a series but no author (Series (Author) pattern), author is the series dir
-    if not author and series:
+    # If we got a series but no author AND no title, fall back to using the
+    # series as the title. Only trigger when title is empty — otherwise we
+    # clobber real titles for "Series_Title -- Subtitle [ASIN]" filenames.
+    if not author and series and not title:
         title = series
         series = None
         confidence = max(confidence, 50)

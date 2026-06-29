@@ -24,10 +24,10 @@ Examples:
 
     parser.add_argument('--source', '-s', default=must_expand('~/qbit'),
                        help='Source directory (default: ~/qbit)')
-    parser.add_argument('--host', '-H', default='audiobookshelf',
-                       help='Remote hostname (default: audiobookshelf)')
-    parser.add_argument('--target', '-t', default='/audiobooks',
-                       help='Target path (default: /audiobooks)')
+    parser.add_argument('--host', '-H', default='roadman',
+                       help='Remote hostname (default: roadman, the Audiobookshelf host)')
+    parser.add_argument('--target', '-t', default='/mnt/media/audiobooks',
+                       help='Target path (default: /mnt/media/audiobooks, the host path that maps into Audiobookshelf)')
     parser.add_argument('--ssh-key', '-k', default=None,
                        help='SSH private key path (auto-detected if not set)')
     parser.add_argument('--dry-run', '-n', action='store_true',

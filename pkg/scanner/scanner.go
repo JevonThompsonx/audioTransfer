@@ -127,9 +127,16 @@ func scanDirEntry(abs, name string, books *[]*models.BookSource) {
 		subBooks := scanContainerDir(abs)
 		*books = append(*books, subBooks...)
 	} else {
-		// Flat book dir or series dir with direct audio
+		// Flat book dir or series dir with direct audio.
+		// Prefer the richest audio filename as the book name when a single
+		// audio file sits directly in this directory — its stem often contains
+		// the full title, author, and ASIN that the directory name does not.
+		bookName := name
+		if hasDirectAudio && len(audioFiles) == 1 {
+			bookName = strings.TrimSuffix(filepath.Base(audioFiles[0]), filepath.Ext(audioFiles[0]))
+		}
 		book := &models.BookSource{
-			Name:       name,
+			Name:       bookName,
 			Path:       abs,
 			AudioFiles: audioFiles,
 			CoverFiles: coverFiles,

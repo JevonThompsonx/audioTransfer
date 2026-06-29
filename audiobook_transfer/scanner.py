@@ -99,9 +99,14 @@ def _scan_dir_entry(dir_path: Path) -> List[BookSource]:
     if (has_sub_books and not has_direct_audio) or (has_sub_books and len(audio_files) > 3):
         return _scan_container_dir(dir_path)
 
-    # Flat book dir
+    # Flat book dir. Prefer the audio file's stem when there's a single audio
+    # file directly in this directory — its stem often contains the full title,
+    # author, and ASIN that the directory name does not.
+    book_name = name
+    if has_direct_audio and len(audio_files) == 1:
+        book_name = audio_files[0].stem
     book = BookSource(
-        name=name,
+        name=book_name,
         path=dir_path,
         audio_files=audio_files,
         cover_files=cover_files,

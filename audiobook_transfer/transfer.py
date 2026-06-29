@@ -9,10 +9,12 @@ from typing import List, Optional, Dict, Tuple
 
 from .utils import logger
 
-DEFAULT_HOST = "audiobookshelf"
+# roadman is the host that runs the Audiobookshelf docker container.
+# /mnt/media/audiobooks is the HOST path bind-mounted into the container as /audiobooks.
+DEFAULT_HOST = "roadman"
 DEFAULT_PORT = 22
 DEFAULT_USER = "root"
-DEFAULT_TARGET_BASE = "/audiobooks"
+DEFAULT_TARGET_BASE = "/mnt/media/audiobooks"
 
 TRANSFER_METHODS = ["native-ssh", "local"]
 

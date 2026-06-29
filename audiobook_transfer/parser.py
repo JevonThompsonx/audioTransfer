@@ -16,8 +16,16 @@ PATTERNS = [
     (r'^(.+?)\s*[-–—]\s*(.+?),\s*Book\s*([\d.]+)$',
      {'author': 1, 'series': 2, 'series_position': 3, 'confidence': 80}),
 
-    # Author - Title [ASIN]
-    (r'^(.+?)\s*[-–—]\s*(.+?)\s*\[([A-Z0-9]{10})\]$',
+    # Series_Title -- Subtitle [ASIN] (no author)
+    (r'^(.{1,50}?)_\s*(.+?)\s*[-–—]{1,2}\s*(.+?)\s*\[([A-Z0-9]{10})\]$',
+     {'series': 1, 'title': 2, 'asin': 4, 'confidence': 75}),
+
+    # Series_Title [ASIN] (no author, no subtitle)
+    (r'^(.{1,50}?)_\s*(.+?)\s*\[([A-Z0-9]{10})\]$',
+     {'series': 1, 'title': 2, 'asin': 3, 'confidence': 70}),
+
+    # Author - Title [ASIN] (author constrained to a reasonable name length)
+    (r'^(.{1,40}?)\s*[-–—]\s*(.+?)\s*\[([A-Z0-9]{10})\]$',
      {'author': 1, 'title': 2, 'asin': 3, 'confidence': 85}),
 
     # Word NN - Title (series with position, e.g. "Pern 01 - Dragonflight")
@@ -347,18 +355,24 @@ def parse_name(name: str, parent_name: Optional[str] = None) -> ParsedInfo:
     # Pass 2: Regex parsing (may override heuristic if higher confidence)
     regex_parse(clean, info)
 
-    # Post-process: inherit author from parent if parent looks like author name
+    # Post-process: inherit author from parent if parent looks like author name.
+    # Skip if the series was already set and matches the parent name (avoids
+    # duplicating a series name as the author for "Series_Title ..." filenames).
     if not info.author and parent_name:
-        parent = parent_name
-        author_to_use = parent_name
-        if ',' in parent:
-            parent = parent.split(',')[0].strip()
-            author_to_use = parent
-        if is_authorish(parent) and not is_title_like(parent):
-            words = author_to_use.split()
-            if len(words) <= 4:
-                info.author = author_to_use
-                info.confidence = max(info.confidence, 45)
+        if info.series and info.series.strip().lower() == parent_name.strip().lower():
+            # Parent is already represented as the series — do not also use it as author.
+            pass
+        else:
+            parent = parent_name
+            author_to_use = parent_name
+            if ',' in parent:
+                parent = parent.split(',')[0].strip()
+                author_to_use = parent
+            if is_authorish(parent) and not is_title_like(parent):
+                words = author_to_use.split()
+                if len(words) <= 4:
+                    info.author = author_to_use
+                    info.confidence = max(info.confidence, 45)
 
     # Post-process: extract series position from Volume/Vol NN
     if info.series_position is None and info.title:

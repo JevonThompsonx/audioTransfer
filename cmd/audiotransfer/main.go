@@ -16,8 +16,8 @@ import (
 func main() {
 	sourceDir := flag.String("source", mustExpand("~/qbit"), "Source directory with audiobooks")
 	destDir := flag.String("dest", mustExpand("~/qbit/organized"), "Destination directory (for local copy)")
-	host := flag.String("host", "audiobookshelf", "Remote hostname")
-	targetBase := flag.String("target", "/audiobooks", "Remote target base path")
+	host := flag.String("host", "roadman", "Remote hostname (default: roadman, the Audiobookshelf host)")
+	targetBase := flag.String("target", "/mnt/media/audiobooks", "Remote target base path (host path that maps into Audiobookshelf)")
 	sshKey := flag.String("ssh-key", "", "Path to SSH private key")
 	dryRun := flag.Bool("dry-run", false, "Preview plan without transferring")
 	dryRunShort := flag.Bool("n", false, "Preview plan (short)")
