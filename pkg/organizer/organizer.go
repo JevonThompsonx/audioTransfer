@@ -187,11 +187,17 @@ func RunTransfer(cfg Config) *models.TransferReport {
 
 			fmt.Printf("\n  [%s] %s\n", client.MethodName(), m.identity.TargetPath())
 
-			success := client.TransferBook(
-				m.book.AudioFiles,
-				m.book.CoverFiles,
-				m.identity.TargetPath(),
-			)
+			var success bool
+			if resumeSkip(client, m.book, m.identity) {
+				utils.Info.Printf("  Skip (already on remote): %s", m.identity.TargetPath())
+				success = true
+			} else {
+				success = client.TransferBook(
+					m.book.AudioFiles,
+					m.book.CoverFiles,
+					m.identity.TargetPath(),
+				)
+			}
 
 			result := models.TransferResult{
 				SourceName: m.book.Name,
@@ -329,6 +335,29 @@ func verifyTransfers(report *models.TransferReport, cfg Config) {
 			report.Failed++
 		}
 	}
+}
+
+// resumeSkip reports whether a book's files already exist on the remote target
+// with matching total size, so an interrupted run can resume without
+// re-uploading books that already completed.
+func resumeSkip(client transfer.TransferClient, book *models.BookSource, identity *models.BookIdentity) bool {
+	var localSize int64
+	for _, f := range append(append([]string{}, book.AudioFiles...), book.CoverFiles...) {
+		if fi, err := os.Stat(f); err == nil {
+			localSize += fi.Size()
+		}
+	}
+	if localSize == 0 {
+		return false
+	}
+
+	v := client.VerifyTransfer(identity.TargetPath())
+	exists, _ := v["exists"].(bool)
+	if !exists {
+		return false
+	}
+	remoteSize, _ := v["total_size"].(int64)
+	return remoteSize == localSize
 }
 
 // resolveIdentity resolves a book identity from parsed info + optional API enrichment.

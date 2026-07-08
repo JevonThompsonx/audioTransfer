@@ -241,28 +241,11 @@ func scanContainerDir(dir string) []*models.BookSource {
 		abs := filepath.Join(dir, name)
 
 		if e.IsDir() && hasAnyAudio(abs) {
-			var audioFiles, coverFiles []string
-			filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
-				if err != nil || d.IsDir() {
-					return nil
-				}
-				if utils.IsAudio(p) {
-					audioFiles = append(audioFiles, p)
-				} else if utils.IsCover(p) {
-					coverFiles = append(coverFiles, p)
-				}
-				return nil
-			})
-			sort.Strings(audioFiles)
-			sort.Strings(coverFiles)
-			book := &models.BookSource{
-				Name:       name,
-				Path:       abs,
-				AudioFiles: audioFiles,
-				CoverFiles: coverFiles,
-			}
-			books = append(books, book)
-			utils.Debug.Printf("  Container book: %s (%d files)", name, len(audioFiles))
+			// Recurse using the same book-vs-container detection as top-level
+			// entries, so a container whose children are themselves containers
+			// (e.g. Author/Series/Title/files) splits into per-title books
+			// instead of collapsing into one flat book per child.
+			scanDirEntry(abs, name, &books)
 		} else if !e.IsDir() {
 			ext := filepath.Ext(name)
 			if utils.IsAudio(abs) {
