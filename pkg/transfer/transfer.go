@@ -40,13 +40,14 @@ type TransferClient interface {
 
 // NativeSSHClient uses the system's ssh/scp commands.
 type NativeSSHClient struct {
-	Host       string
-	Port       int
-	User       string
-	TargetBase string
-	sshKeyPath string
-	sshPath    string
-	scpPath    string
+	Host          string
+	Port          int
+	User          string
+	TargetBase    string
+	sshKeyPath    string
+	sshPath       string
+	scpPath       string
+	controlSocket string
 }
 
 // NewNativeSSHClient creates a new native SSH transfer client.
@@ -93,6 +94,14 @@ func (c *NativeSSHClient) Connect() bool {
 		return false
 	}
 
+	// Set up SSH connection multiplexing socket
+	socketDir := filepath.Join(os.TempDir(), "audioTransfer-ssh")
+	if err := os.MkdirAll(socketDir, 0700); err != nil {
+		utils.Warn.Printf("Failed to create SSH control socket dir: %v", err)
+	} else {
+		c.controlSocket = filepath.Join(socketDir, fmt.Sprintf("socket_%s_%s_%d", c.User, c.Host, c.Port))
+	}
+
 	cmd := c.buildSSHCmd("echo ok")
 	result, err := runCmd(cmd, 15*time.Second)
 	if err != nil || !strings.Contains(result, "ok") {
@@ -103,7 +112,20 @@ func (c *NativeSSHClient) Connect() bool {
 	return true
 }
 
-func (c *NativeSSHClient) Disconnect() {}
+func (c *NativeSSHClient) Disconnect() {
+	if c.controlSocket == "" {
+		return
+	}
+	cmd := []string{
+		c.sshPath,
+		"-o", fmt.Sprintf("ControlPath=%s", c.controlSocket),
+		"-O", "exit",
+		fmt.Sprintf("%s@%s", c.User, c.Host),
+	}
+	runCmd(cmd, 5*time.Second) // best-effort; ignore result
+	os.Remove(c.controlSocket)
+	c.controlSocket = ""
+}
 
 func (c *NativeSSHClient) TransferBook(audioFiles, coverFiles []string, targetSubpath string) bool {
 	targetSubpath, err := validateSubpath(targetSubpath)
@@ -151,17 +173,24 @@ func (c *NativeSSHClient) TransferBook(audioFiles, coverFiles []string, targetSu
 
 func (c *NativeSSHClient) VerifyTransfer(remoteSubpath string) map[string]interface{} {
 	result := map[string]interface{}{
-		"path":       c.TargetBase + "/" + remoteSubpath,
-		"exists":     false,
-		"files":      []map[string]interface{}{},
-		"total_size": int64(0),
+		"path":             c.TargetBase + "/" + remoteSubpath,
+		"exists":           false,
+		"files":            []map[string]interface{}{},
+		"total_size":       int64(0),
+		"connection_error": false,
 	}
 
 	remotePath := c.TargetBase + "/" + remoteSubpath
 	cmd := c.buildSSHCmd(fmt.Sprintf("ls -la %s 2>/dev/null || echo 'MISSING'", escapeSSH(remotePath)))
 	output, err := runCmd(cmd, 15*time.Second)
-	if err != nil || strings.Contains(output, "MISSING") {
+	if err != nil {
+		result["error"] = fmt.Sprintf("SSH connection failed: %v", err)
+		result["connection_error"] = true
+		return result
+	}
+	if strings.Contains(output, "MISSING") {
 		result["error"] = "Remote path not found"
+		result["connection_error"] = false
 		return result
 	}
 
@@ -197,6 +226,13 @@ func (c *NativeSSHClient) buildSSHCmd(remoteCmd string) []string {
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "LogLevel=ERROR",
 	}
+	if c.controlSocket != "" {
+		cmd = append(cmd,
+			"-o", "ControlMaster=auto",
+			"-o", fmt.Sprintf("ControlPath=%s", c.controlSocket),
+			"-o", "ControlPersist=600",
+		)
+	}
 	if c.sshKeyPath != "" {
 		cmd = append(cmd, "-i", c.sshKeyPath)
 	}
@@ -214,6 +250,13 @@ func (c *NativeSSHClient) buildSCPCmd(localFile, remoteDir string) []string {
 		"-o", "ConnectTimeout=10",
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "LogLevel=ERROR",
+	}
+	if c.controlSocket != "" {
+		cmd = append(cmd,
+			"-o", "ControlMaster=auto",
+			"-o", fmt.Sprintf("ControlPath=%s", c.controlSocket),
+			"-o", "ControlPersist=600",
+		)
 	}
 	if c.sshKeyPath != "" {
 		cmd = append(cmd, "-i", c.sshKeyPath)
@@ -239,12 +282,12 @@ func (c *NativeSSHClient) ensureRemoteDir(remotePath string) bool {
 }
 
 func (c *NativeSSHClient) chmodRemoteDir(remotePath string) {
-	cmd := c.buildSSHCmd(fmt.Sprintf("chmod -R 777 %s", escapeSSH(remotePath)))
+	cmd := c.buildSSHCmd(fmt.Sprintf("find %s -type d -exec chmod 755 {} + ; find %s -type f -exec chmod 644 {} +", escapeSSH(remotePath), escapeSSH(remotePath)))
 	_, err := runCmd(cmd, 15*time.Second)
 	if err != nil {
 		utils.Warn.Printf("  chmod warning for %s: %v", remotePath, err)
 	} else {
-		utils.Debug.Printf("  chmod 777: %s", remotePath)
+		utils.Debug.Printf("  chmod 755 (dirs) / 644 (files): %s", remotePath)
 	}
 }
 
@@ -297,7 +340,7 @@ func (c *LocalClient) TransferBook(audioFiles, coverFiles []string, targetSubpat
 	localDir := filepath.Join(c.TargetBase, targetSubpath)
 	utils.Info.Printf("  Target: %s", localDir)
 
-	if err := os.MkdirAll(localDir, 0777); err != nil {
+	if err := os.MkdirAll(localDir, 0755); err != nil {
 		utils.Error.Printf("Failed to create local dir: %v", err)
 		return false
 	}
@@ -317,10 +360,14 @@ func (c *LocalClient) TransferBook(audioFiles, coverFiles []string, targetSubpat
 	if success {
 		utils.Info.Printf("  OK: %d/%d files copied", transferred, len(allFiles))
 		// Ensure Audiobookshelf can read transferred files
-		os.Chmod(localDir, 0777)
+		os.Chmod(localDir, 0755)
 		filepath.Walk(localDir, func(p string, info os.FileInfo, err error) error {
 			if err == nil {
-				os.Chmod(p, 0777)
+				if info.IsDir() {
+					os.Chmod(p, 0755)
+				} else {
+					os.Chmod(p, 0644)
+				}
 			}
 			return nil
 		})
@@ -330,20 +377,23 @@ func (c *LocalClient) TransferBook(audioFiles, coverFiles []string, targetSubpat
 
 func (c *LocalClient) VerifyTransfer(remoteSubpath string) map[string]interface{} {
 	result := map[string]interface{}{
-		"path":       filepath.Join(c.TargetBase, remoteSubpath),
-		"exists":     false,
-		"files":      []map[string]interface{}{},
-		"total_size": int64(0),
+		"path":             filepath.Join(c.TargetBase, remoteSubpath),
+		"exists":           false,
+		"files":            []map[string]interface{}{},
+		"total_size":       int64(0),
+		"connection_error": false,
 	}
 
 	localPath := filepath.Join(c.TargetBase, remoteSubpath)
 	info, err := os.Stat(localPath)
 	if err != nil {
 		result["error"] = "Local path not found"
+		result["connection_error"] = false
 		return result
 	}
 	if !info.IsDir() {
 		result["error"] = "Not a directory"
+		result["connection_error"] = false
 		return result
 	}
 

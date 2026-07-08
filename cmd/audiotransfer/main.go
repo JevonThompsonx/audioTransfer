@@ -32,6 +32,8 @@ func main() {
 	verbose := flag.Bool("verbose", false, "Verbose debug output")
 	verboseShort := flag.Bool("v", false, "Verbose (short)")
 	methods := flag.String("methods", "", "Transfer methods (comma-separated: native-ssh,local)")
+	parallel := flag.Int("parallel", 2, "Max concurrent transfers (default 2 — SSH multiplexing removes connection overhead, but concurrent large files still share your upload bandwidth)")
+	parallelShort := flag.Int("P", 2, "Max concurrent transfers (short)")
 	flag.Parse()
 
 	// Handle short flags
@@ -52,6 +54,13 @@ func main() {
 	}
 	if *verboseShort {
 		*verbose = true
+	}
+	if *parallelShort != 2 {
+		*parallel = *parallelShort
+	}
+	// Clamp parallel to range 1-8, reset to 2 if outside
+	if *parallel < 1 || *parallel > 8 {
+		*parallel = 2
 	}
 
 	// Set log output
@@ -105,6 +114,7 @@ func main() {
 		Verify:      *verify || *verifyShort,
 		LocalOnly:   *localOnly || *localOnlyShort,
 		Methods:     methodList,
+		Parallel:    *parallel,
 	})
 
 	if report.Failed > 0 {

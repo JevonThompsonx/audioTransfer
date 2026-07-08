@@ -15,6 +15,7 @@ type BookSource struct {
 	CoverFiles   []string // List of cover image paths
 	IsSingleFile bool     // True if just one .m4b/.mp3 file
 	IsFromZip    bool     // True if extracted from zip
+	AuthorDir    string   // the top-level source-root entry name that contains this book (used to disambiguate the parser's parent-name-as-author heuristic when a book sits multiple directory levels below its true author folder)
 }
 
 // ParsedInfo holds parsed metadata from filename/directory.

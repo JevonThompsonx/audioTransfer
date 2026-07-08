@@ -71,3 +71,17 @@ func MustExpand(path string) string {
 	}
 	return path
 }
+
+// ConfigDir returns ~/.audiotransfer, creating it if it doesn't exist.
+// Used for the persistent metadata cache and transfer checkpoint file.
+func ConfigDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".audiotransfer")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}

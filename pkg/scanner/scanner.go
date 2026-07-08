@@ -69,7 +69,7 @@ func ScanDirectory(cfg ScanDirConfiguration) []*models.BookSource {
 		abs := filepath.Join(cfg.SourceDir, name)
 
 		if entry.IsDir() {
-			scanDirEntry(abs, name, &books)
+			scanDirEntry(abs, name, name, &books)
 		} else {
 			ext := filepath.Ext(name)
 			if utils.IsAudio(abs) {
@@ -88,10 +88,10 @@ func ScanDirectory(cfg ScanDirConfiguration) []*models.BookSource {
 }
 
 // scanDirEntry categorizes a directory entry as a book dir, series dir, or container.
-func scanDirEntry(abs, name string, books *[]*models.BookSource) {
+func scanDirEntry(abs, name, authorDir string, books *[]*models.BookSource) {
 	// Detect "Series Name (Author)" pattern — treat as a series container
 	if isSeriesDir(name) {
-		subBooks := scanContainerDir(abs)
+		subBooks := scanContainerDir(abs, authorDir)
 		utils.Debug.Printf("  Series dir: %s (%d sub-books)", name, len(subBooks))
 		*books = append(*books, subBooks...)
 		return
@@ -124,7 +124,7 @@ func scanDirEntry(abs, name string, books *[]*models.BookSource) {
 
 	if (hasSubBookDirs && !hasDirectAudio) || (hasSubBookDirs && len(audioFiles) > 3) {
 		// Container: recurse into subdirectories
-		subBooks := scanContainerDir(abs)
+		subBooks := scanContainerDir(abs, authorDir)
 		*books = append(*books, subBooks...)
 	} else {
 		// Flat book dir or series dir with direct audio.
@@ -140,6 +140,7 @@ func scanDirEntry(abs, name string, books *[]*models.BookSource) {
 			Path:       abs,
 			AudioFiles: audioFiles,
 			CoverFiles: coverFiles,
+			AuthorDir:  authorDir,
 		}
 		*books = append(*books, book)
 		utils.Debug.Printf("  Book dir: %s (%d audio, %d covers)", name, len(audioFiles), len(coverFiles))
@@ -226,7 +227,7 @@ func hasAnyAudio(dir string) bool {
 
 // scanContainerDir handles directories that contain multiple separate sub-books.
 // This includes both "Series (Author)" directories and flat containers with "Book - Author" subdirectories.
-func scanContainerDir(dir string) []*models.BookSource {
+func scanContainerDir(dir string, authorDir string) []*models.BookSource {
 	var books []*models.BookSource
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -245,7 +246,7 @@ func scanContainerDir(dir string) []*models.BookSource {
 			// entries, so a container whose children are themselves containers
 			// (e.g. Author/Series/Title/files) splits into per-title books
 			// instead of collapsing into one flat book per child.
-			scanDirEntry(abs, name, &books)
+			scanDirEntry(abs, name, authorDir, &books)
 		} else if !e.IsDir() {
 			ext := filepath.Ext(name)
 			if utils.IsAudio(abs) {
@@ -254,6 +255,7 @@ func scanContainerDir(dir string) []*models.BookSource {
 					Path:         dir,
 					AudioFiles:   []string{abs},
 					IsSingleFile: true,
+					AuthorDir:    authorDir,
 				}
 				books = append(books, book)
 			} else if utils.IsCover(abs) || utils.IsMeta(abs) {

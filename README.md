@@ -2,7 +2,9 @@
 
 Audiobook organizer and transfer tool for Audiobookshelf. Combines the best of two independent implementations.
 
-**Two implementations available:** Go (recommended for speed, zero deps) and Python.
+**Two implementations available:** Go (actively maintained, recommended) and Python (legacy, frozen, not recommended for new use).
+
+> **The Go implementation is the actively maintained version.** The Python implementation (`audiobook_transfer/`) is now legacy/frozen — it has known bugs (directory-tree scanning that can flatten nested series into one entry, author misattribution for books nested under series subfolders, and no resume/checkpoint support across interrupted runs) that have been fixed in the Go version but will not be ported back to Python. Use the Go version for all real usage; the Python code is kept only for reference.
 
 ## Quick Start
 
@@ -32,6 +34,7 @@ Options:
   --host, -H       Remote hostname (default: roadman)
   --target, -t     Remote target path (default: /mnt/media/audiobooks)
   --ssh-key, -k    SSH private key path (auto-detected if unset)
+  --parallel, -P   Max concurrent transfers (default: 2)
   --dry-run, -n    Preview plan without transferring
   --local, -L      Local copy only, no SSH
   --force, -f      Skip confirmation prompts
@@ -40,6 +43,8 @@ Options:
   --verbose, -v    Debug output
   --methods, -m    Transfer methods in order: native-ssh,local
 ```
+
+**Concurrency note:** The `--parallel` flag controls concurrent file transfers. SSH connection multiplexing (see "native-ssh" transfer method below) reuses a single authenticated connection for multiple transfers and verification checks, removing per-operation connection overhead. This makes running multiple transfers safely. However, concurrent large audiobook files still compete for the same upload bandwidth — higher values don't necessarily yield proportionally faster transfers. The conservative default of 2 is a reasonable starting point; users with faster/more reliable links can experiment with higher values up to 8.
 
 ### Examples
 
@@ -143,6 +148,7 @@ Realm of the Elderlings (Robin Hobb)/     ← Author: Robin Hobb, Series: Realm 
 - Requires SSH key authentication (passwordless)
 - Supports custom port via `-p` flag in system SSH config
 - Sets `BatchMode=yes`, `ConnectTimeout=10`, `StrictHostKeyChecking=accept-new`
+- Uses SSH connection multiplexing (ControlMaster/ControlPersist) so multiple file transfers and verification checks reuse one authenticated connection instead of reconnecting per operation — faster, and avoids remote SSH server connection-rate limits under heavy use (e.g. large libraries or high `--parallel` values)
 
 ### local (fallback)
 - Copies files to a local directory
@@ -159,6 +165,12 @@ Realm of the Elderlings (Robin Hobb)/     ← Author: Robin Hobb, Series: Realm 
 native-ssh  ──→  local  (tried in order, stops when all books transferred)
 ```
 
+## Resume & Checkpoints
+
+The tool writes a checkpoint file to `~/.audiotransfer/checkpoint.json` after each successfully transferred book, recording its resolved identity and transfer status keyed by source file path. If a run is interrupted (crash, reboot, Ctrl-C) and relaunched against the same source directory, already-completed books are detected via this checkpoint and skipped entirely — no re-scanning, re-parsing, or re-querying metadata APIs for books already known to be done. The checkpoint also revalidates each entry's recorded file size and modification time against the live source file before trusting it, so replacing a source file's content (same path, different content) is correctly detected and re-processed rather than silently skipped.
+
+OpenLibrary metadata lookups are cached persistently at `~/.audiotransfer/metadata_cache.json` (30-day TTL) — this makes repeated runs against the same library deterministic (the same book always resolves to the same identity, rather than potentially getting slightly different results from OpenLibrary's API on different runs).
+
 ## Project Structure
 
 ```
@@ -172,7 +184,7 @@ audioTransfer/
 │   ├── transfer/transfer.go       NativeSSHClient + LocalClient with fallback orchestration
 │   ├── organizer/organizer.go     Pipeline orchestration (scan→parse→match→transfer)
 │   └── utils/utils.go             File type helpers, temp dir, logging, path expansion
-├── audiobook_transfer/            Python implementation (mirror of Go packages)
+├── audiobook_transfer/            Python implementation — LEGACY, frozen, do not use for new work
 │   ├── __init__.py
 │   ├── cli.py                     argparse CLI with all flags
 │   ├── models.py                  Dataclass types
@@ -208,11 +220,10 @@ audioTransfer/
 - **OpenLibrary API** — free, no API key required, read-only queries
 - **Default user** — SSH defaults to `root`; configure via `--host` (e.g., `user@host` syntax in `~/.ssh/config`)
 - **Host key checking** — uses `StrictHostKeyChecking=accept-new` on first connection; add host to `~/.ssh/known_hosts` before trusted use
+- **File permissions** — transferred files/directories are set to `644`/`755` (owner read-write, group/other read-only) rather than world-writable. This was previously `777`; verified unnecessary since the reference Audiobookshelf deployment runs its container process as root (root bypasses Unix permission checks entirely), so tightening this is a pure security improvement with no functionality loss on that setup. If you're running Audiobookshelf as a non-root user via PUID/PGID and it can't read transferred files, you may need to adjust ownership/group membership on the target host rather than reverting to `777`.
 
 ## Limitations
 
 - No tests yet (test suite planned)
 - No audio tag reading (mutagen equivalent)
-- No resume/partial-transfer tracking
-- Single-threaded transfers (no parallel SCP)
 - No `paramiko` SSH backend implemented in Python version

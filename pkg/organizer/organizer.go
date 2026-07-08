@@ -3,10 +3,13 @@ package organizer
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/jevonx/audioTransfer/pkg/metadata"
 	"github.com/jevonx/audioTransfer/pkg/models"
@@ -32,6 +35,99 @@ type Config struct {
 	Verify      bool
 	LocalOnly   bool
 	Methods     []string
+	Parallel    int
+}
+
+// CheckpointEntry holds the checkpoint state for a single book.
+type CheckpointEntry struct {
+	Identity       *models.BookIdentity
+	TransferStatus string    // "transferred" or "local"
+	MethodUsed     string
+	TransferredAt  time.Time
+	FilesCount     int
+	SourceSize     int64     // sum of book's audio+cover file sizes at checkpoint time
+	SourceModTime  time.Time // latest mtime among the book's source files at checkpoint time
+}
+
+// Checkpoint holds the checkpoint state for all books processed.
+type Checkpoint struct {
+	Books map[string]*CheckpointEntry // keyed by book.Path (absolute source path)
+}
+
+// CheckpointPath returns the path to the checkpoint file in the config directory.
+func CheckpointPath() (string, error) {
+	dir, err := utils.ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "checkpoint.json"), nil
+}
+
+// LoadCheckpoint loads the checkpoint from disk. If the file doesn't exist,
+// returns an empty checkpoint with no error.
+func LoadCheckpoint(path string) (*Checkpoint, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &Checkpoint{Books: make(map[string]*CheckpointEntry)}, nil
+		}
+		return nil, err
+	}
+
+	var cp Checkpoint
+	if err := json.Unmarshal(data, &cp); err != nil {
+		return nil, err
+	}
+	if cp.Books == nil {
+		cp.Books = make(map[string]*CheckpointEntry)
+	}
+	return &cp, nil
+}
+
+// SaveCheckpoint saves the checkpoint to disk atomically by writing to a temp
+// file first and then renaming.
+func SaveCheckpoint(path string, cp *Checkpoint) error {
+	data, err := json.MarshalIndent(cp, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpPath, path)
+}
+
+// bookSourceStat computes the total size and latest modification time of a book's
+// source files (audio + cover files).
+func bookSourceStat(book *models.BookSource) (size int64, modTime time.Time) {
+	for _, f := range append(append([]string{}, book.AudioFiles...), book.CoverFiles...) {
+		if fi, err := os.Stat(f); err == nil {
+			size += fi.Size()
+			if fi.ModTime().After(modTime) {
+				modTime = fi.ModTime()
+			}
+		}
+	}
+	return
+}
+
+// checkpointKey returns a stable, unique key for a book to use in the
+// checkpoint map. book.Path is NOT safe for this: for a standalone top-level
+// audio file (BookSource.IsSingleFile), the scanner deliberately sets Path to
+// the file's *containing directory* (not the file itself), so that
+// filepath.Base(book.Path) yields useful parent-directory context elsewhere
+// in this file. That means two different top-level single-file downloads in
+// the same source directory would collide on an identical book.Path and
+// silently overwrite each other's checkpoint entry. book.AudioFiles[0] is
+// always the book's own actual file path and is safe to use as a unique key.
+func checkpointKey(book *models.BookSource) string {
+	if len(book.AudioFiles) > 0 {
+		return book.AudioFiles[0]
+	}
+	return book.Path
 }
 
 // RunTransfer executes the full audiobook transfer pipeline.
@@ -51,6 +147,20 @@ func RunTransfer(cfg Config) *models.TransferReport {
 		return report
 	}
 
+	// Load checkpoint
+	var checkpoint *Checkpoint
+	checkpointPath, err := CheckpointPath()
+	if err != nil {
+		utils.Info.Printf("Warning: could not get checkpoint path: %v", err)
+		checkpoint = &Checkpoint{Books: make(map[string]*CheckpointEntry)}
+	} else {
+		checkpoint, err = LoadCheckpoint(checkpointPath)
+		if err != nil {
+			utils.Info.Printf("Warning: could not load checkpoint: %v", err)
+			checkpoint = &Checkpoint{Books: make(map[string]*CheckpointEntry)}
+		}
+	}
+
 	// Phase 2: Parse + Match
 	fmt.Printf("[2/4] Analyzing metadata for %d books...\n", len(books))
 
@@ -62,6 +172,29 @@ func RunTransfer(cfg Config) *models.TransferReport {
 	var matched []bookWithID
 	for i, book := range books {
 		fmt.Printf("  [%d/%d] %s\n", i+1, len(books), book.Name)
+
+		// Check if this book is already in the checkpoint and still valid
+		if entry, exists := checkpoint.Books[checkpointKey(book)]; exists && (entry.TransferStatus == "transferred" || entry.TransferStatus == "local") {
+			// Verify source files haven't changed
+			currentSize, currentModTime := bookSourceStat(book)
+			if currentSize == entry.SourceSize && currentModTime.Equal(entry.SourceModTime) {
+				// Book is already transferred and source files are unchanged — skip re-processing
+				result := models.TransferResult{
+					SourceName: book.Name,
+					Identity:   entry.Identity,
+					Status:     entry.TransferStatus,
+					FilesCount: entry.FilesCount,
+					MethodUsed: entry.MethodUsed,
+				}
+				report.Results = append(report.Results, result)
+				if entry.TransferStatus == "local" {
+					report.Local++
+				} else {
+					report.Transferred++
+				}
+				continue
+			}
+		}
 
 		// Determine parent context: the directory containing the book's files
 		var parentName string
@@ -91,6 +224,20 @@ func RunTransfer(cfg Config) *models.TransferReport {
 			parsed.Confidence = max(parsed.Confidence, 60)
 		}
 
+		// Structural evidence from the scanner (the top-level author folder the book
+		// was discovered under) beats the parser's weak parent-name-as-author guess.
+		// Only the parser's parent-name heuristic ever produces confidence <= 50 for
+		// an author assignment; every filename-based match scores >= 65 (confirmed by
+		// reading heuristicParse/regexParse/parseParentContext directly) — so a low
+		// confidence author here reliably means it came from guessing the immediate
+		// parent dir name, not the actual filename.
+		if book.AuthorDir != "" && book.AuthorDir != parentName && parsed.Confidence <= 50 {
+			if parser.IsAuthorish(book.AuthorDir) && !parser.IsTitleLike(book.AuthorDir) {
+				parsed.Author = book.AuthorDir
+				parsed.Confidence = 75
+			}
+		}
+
 		identity := resolveIdentity(parsed, book, cfg)
 
 		if identity != nil {
@@ -106,7 +253,13 @@ func RunTransfer(cfg Config) *models.TransferReport {
 	}
 
 	if len(matched) == 0 {
-		fmt.Println("No books could be matched to identities.")
+		if report.Transferred > 0 || report.Local > 0 {
+			// Every book was already handled via the checkpoint fast-path —
+			// nothing left to match/transfer, but this is success, not failure.
+			report.PrintSummary()
+		} else {
+			fmt.Println("No books could be matched to identities.")
+		}
 		return report
 	}
 
@@ -166,9 +319,9 @@ func RunTransfer(cfg Config) *models.TransferReport {
 			continue
 		}
 
-		anySuccess := false
+		// Build pending list (books not already transferred/local)
+		var pending []bookWithID
 		for _, m := range matched {
-			// Skip already transferred
 			alreadyDone := false
 			for _, r := range report.Results {
 				if r.SourceName == m.book.Name && (r.Status == "transferred" || r.Status == "local") {
@@ -176,57 +329,107 @@ func RunTransfer(cfg Config) *models.TransferReport {
 					break
 				}
 			}
-			if alreadyDone {
-				continue
+			if !alreadyDone {
+				pending = append(pending, m)
 			}
+		}
 
-			status := "transferred"
-			if client.MethodName() == "local" {
-				status = "local"
-			}
+		// Parallel transfer with bounded concurrency
+		status := "transferred"
+		if client.MethodName() == "local" {
+			status = "local"
+		}
 
-			fmt.Printf("\n  [%s] %s\n", client.MethodName(), m.identity.TargetPath())
+		sem := make(chan struct{}, cfg.Parallel)
+		resultsChan := make(chan models.TransferResult, len(pending))
+		var wg sync.WaitGroup
 
-			var success bool
-			if resumeSkip(client, m.book, m.identity) {
-				utils.Info.Printf("  Skip (already on remote): %s", m.identity.TargetPath())
-				success = true
-			} else {
-				success = client.TransferBook(
-					m.book.AudioFiles,
-					m.book.CoverFiles,
-					m.identity.TargetPath(),
-				)
-			}
+		for _, m := range pending {
+			wg.Add(1)
+			go func(m bookWithID) {
+				sem <- struct{}{}        // acquire semaphore slot
+				defer func() { <-sem }() // release semaphore slot
+				defer wg.Done()
 
-			result := models.TransferResult{
-				SourceName: m.book.Name,
-				Identity:   m.identity,
-				Status:     status,
-				FilesCount: len(m.book.AudioFiles) + len(m.book.CoverFiles),
-				MethodUsed: method,
-			}
+				fmt.Printf("\n  [%s] %s\n", client.MethodName(), m.identity.TargetPath())
 
-			if !success {
-				result.Status = "failed"
-				result.Error = "Transfer failed"
-			}
+				var success bool
+				if resumeSkip(client, m.book, m.identity) {
+					utils.Info.Printf("  Skip (already on remote): %s", m.identity.TargetPath())
+					success = true
+				} else {
+					success = client.TransferBook(
+						m.book.AudioFiles,
+						m.book.CoverFiles,
+						m.identity.TargetPath(),
+					)
+				}
 
+				result := models.TransferResult{
+					SourceName: m.book.Name,
+					Identity:   m.identity,
+					Status:     status,
+					FilesCount: len(m.book.AudioFiles) + len(m.book.CoverFiles),
+					MethodUsed: method,
+				}
+
+				if !success {
+					result.Status = "failed"
+					result.Error = "Transfer failed"
+				}
+
+				resultsChan <- result
+			}(m)
+		}
+
+		// Wait for all workers and close results channel
+		go func() {
+			wg.Wait()
+			close(resultsChan)
+		}()
+
+		// Read results and update report (single-threaded to avoid mutex on report.Results)
+		anySuccess := false
+		for result := range resultsChan {
 			// Remove old results for same book (replaces, not duplicates)
 			for i, r := range report.Results {
-				if r.SourceName == m.book.Name {
+				if r.SourceName == result.SourceName {
 					report.Results = append(report.Results[:i], report.Results[i+1:]...)
 					break
 				}
 			}
 			report.Results = append(report.Results, result)
 
-			if success {
+			if result.Status == "transferred" || result.Status == "local" {
 				anySuccess = true
-				if status == "local" {
+				if result.Status == "local" {
 					report.Local++
 				} else {
 					report.Transferred++
+				}
+			}
+
+			// Update checkpoint on success
+			if result.Status == "transferred" || result.Status == "local" {
+				for _, m := range pending {
+					if m.book.Name == result.SourceName {
+						currentSize, currentModTime := bookSourceStat(m.book)
+						checkpoint.Books[checkpointKey(m.book)] = &CheckpointEntry{
+							Identity:       result.Identity,
+							TransferStatus: result.Status,
+							MethodUsed:     result.MethodUsed,
+							TransferredAt:  time.Now(),
+							FilesCount:     result.FilesCount,
+							SourceSize:     currentSize,
+							SourceModTime:  currentModTime,
+						}
+						if checkpointPath != "" {
+							if err := SaveCheckpoint(checkpointPath, checkpoint); err != nil {
+								utils.Info.Printf("Warning: could not save checkpoint: %v", err)
+							}
+						}
+						break
+					}
 				}
 			}
 		}
@@ -296,6 +499,20 @@ func RunTransfer(cfg Config) *models.TransferReport {
 
 // verifyTransfers verifies transferred files exist on target.
 func verifyTransfers(report *models.TransferReport, cfg Config) {
+	// Reuse one connected client per method across every book being verified,
+	// instead of creating (and never even Connect()-ing) a throwaway client per
+	// book. Without Connect() being called, controlSocket is never populated so
+	// SSH multiplexing never kicks in for verification — this was the actual
+	// cause of the false-negative "MISSING" wall of results tonight, since every
+	// verify call opened its own independent, unauthenticated-connection-reused
+	// ssh subprocess in rapid succession.
+	clients := make(map[string]transfer.TransferClient)
+	defer func() {
+		for _, c := range clients {
+			c.Disconnect()
+		}
+	}()
+
 	for _, r := range report.Results {
 		if r.Status != "transferred" && r.Status != "local" {
 			continue
@@ -309,8 +526,17 @@ func verifyTransfers(report *models.TransferReport, cfg Config) {
 			continue
 		}
 
-		client := transfer.NewClient(method, cfg.Host, cfg.TargetBase, cfg.SSHKeyPath, 22)
-		v := client.VerifyTransfer(r.Identity.TargetPath())
+		client, ok := clients[method]
+		if !ok {
+			client = transfer.NewClient(method, cfg.Host, cfg.TargetBase, cfg.SSHKeyPath, 22)
+			if !client.Connect() {
+				utils.Warn.Printf("  Could not connect to verify via %s; skipping remaining %s verifications", method, method)
+				continue
+			}
+			clients[method] = client
+		}
+
+		v := verifyWithRetry(client, r.Identity.TargetPath(), 3)
 
 		if exists, ok := v["exists"].(bool); ok && exists {
 			files, _ := v["files"].([]map[string]interface{})
@@ -335,6 +561,24 @@ func verifyTransfers(report *models.TransferReport, cfg Config) {
 			report.Failed++
 		}
 	}
+}
+
+// verifyWithRetry calls VerifyTransfer, retrying on a transient connection
+// failure (connection_error=true) but not on a genuine "path not found" result
+// (connection_error=false) — those are real and retrying them wastes time.
+func verifyWithRetry(client transfer.TransferClient, targetPath string, attempts int) map[string]interface{} {
+	var v map[string]interface{}
+	for i := 0; i < attempts; i++ {
+		v = client.VerifyTransfer(targetPath)
+		connErr, _ := v["connection_error"].(bool)
+		if !connErr {
+			return v
+		}
+		if i < attempts-1 {
+			time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+		}
+	}
+	return v
 }
 
 // resumeSkip reports whether a book's files already exist on the remote target
