@@ -173,8 +173,15 @@ func RunTransfer(cfg Config) *models.TransferReport {
 	for i, book := range books {
 		fmt.Printf("  [%d/%d] %s\n", i+1, len(books), book.Name)
 
-		// Check if this book is already in the checkpoint and still valid
-		if entry, exists := checkpoint.Books[checkpointKey(book)]; exists && (entry.TransferStatus == "transferred" || entry.TransferStatus == "local") {
+		// Check if this book is already in the checkpoint and still valid.
+		// A "transferred" (real remote success) entry always counts as done.
+		// A "local" entry only counts as done when this run is ALSO local-only —
+		// otherwise a book that fell back to local (e.g. because the remote was
+		// briefly unreachable) would never get a real remote transfer attempted
+		// again on a later, non-local-only run.
+		entry, exists := checkpoint.Books[checkpointKey(book)]
+		checkpointDone := exists && (entry.TransferStatus == "transferred" || (entry.TransferStatus == "local" && cfg.LocalOnly))
+		if checkpointDone {
 			// Verify source files haven't changed
 			currentSize, currentModTime := bookSourceStat(book)
 			if currentSize == entry.SourceSize && currentModTime.Equal(entry.SourceModTime) {
