@@ -474,6 +474,15 @@ func isAuthorName(s string) bool {
 	if strings.HasPrefix(lower, "the ") || strings.HasPrefix(lower, "a ") || strings.HasPrefix(lower, "an ") {
 		return false
 	}
+	// Reject possessive/quantifier openers ("Our Infinite Fates", "My Dark
+	// Vanessa") — nobody's actual name starts with these, but plain word-count
+	// heuristics alone can't otherwise distinguish a title like this from a
+	// real two-to-three word name.
+	for _, opener := range []string{"our ", "my ", "her ", "his ", "their ", "your "} {
+		if strings.HasPrefix(lower, opener) {
+			return false
+		}
+	}
 	// Reject strings containing digits (not author names)
 	for _, w := range words {
 		for _, c := range w {
