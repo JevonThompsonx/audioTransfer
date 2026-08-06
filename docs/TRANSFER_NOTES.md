@@ -117,7 +117,8 @@ Host roadman-ts
 - **Missing covers:** Some books lack cover images (low priority)
 - **`Lesbian Romance 27.07.2018`:**382 subdirs, flat dump structure (leave as-is unless requested)
 - **`Fuse/That Time I Got Reincarnated as a Slime`:** Author "Fuse" is correct (it's the actual light novel author)
-- **~95 stale `isMissing` items** (7 author-level + 88 Lesbian Romance parent-level): flagged during the 2026-08-05 forced rescan; all have proper book-level replacements, hidden from UI, harmless. Clean up via UI "remove missing items" or API if desired.
+- **~95 stale `isMissing` items** (7 author-level + 88 Lesbian Romance parent-level): flagged during the 2026-08-05 forced rescan; **all purged** on 2026-08-05 via API (they had proper book-level replacements). Now 0 remaining.
+- **Mistborn series description** set via ABS API (Era 1 + Era 2/Wax & Wayne + Secret History collection).
 
 ### Loose-File Merge Fixes (2026-08-05)
 Nested books absorbing into one item due to loose audio at author/series level — fixed by moving nested book folders to siblings:
