@@ -42,6 +42,8 @@ Options:
   --verify, -V     Verify transfers after completion
   --verbose, -v    Debug output
   --methods, -m    Transfer methods in order: native-ssh,local
+  --delete-source  Delete source files after successful transfer (default on)
+  --keep-source, -K  Keep source files after transfer (disables --delete-source)
 ```
 
 **Concurrency note:** The `--parallel` flag controls concurrent file transfers. SSH connection multiplexing (see "native-ssh" transfer method below) reuses a single authenticated connection for multiple transfers and verification checks, removing per-operation connection overhead. This makes running multiple transfers safely. However, concurrent large audiobook files still compete for the same upload bandwidth — higher values don't necessarily yield proportionally faster transfers. The conservative default of 2 is a reasonable starting point; users with faster/more reliable links can experiment with higher values up to 8.
@@ -64,6 +66,11 @@ Options:
 # Force mode: skip all prompts (for scripts)
 ./audiotransfer --source ~/qbit --force --local
 
+# Keep source files on this device (deletion is on by default)
+./audiotransfer --source ~/qbit --keep-source
+```
+
+> **Destructive by default:** `--delete-source` is ON by default — a book's local source files are deleted after a successful (post-verify) transfer. Use `--keep-source` to keep them, and `--dry-run` first to preview exactly what would be deleted.
 # Custom SSH key and port
 ./audiotransfer --source ~/qbit --ssh-key ~/.ssh/id_ed25519
 ```

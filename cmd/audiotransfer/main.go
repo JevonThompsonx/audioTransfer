@@ -36,8 +36,9 @@ func main() {
 	parallelShort := flag.Int("P", 2, "Max concurrent transfers (short)")
 	virusScan := flag.Bool("virus-scan", true, "Pre-transfer ClamAV scan (default on)")
 	virusScanOff := flag.Bool("no-virus-scan", false, "Disable pre-transfer virus scan")
-	deleteSource := flag.Bool("delete-source", false, "Delete source files after successful transfer (destructive; requires confirmation unless --force)")
-	deleteSourceShort := flag.Bool("D", false, "Delete source files after transfer (short)")
+	deleteSource := flag.Bool("delete-source", true, "Delete source files after successful transfer (default on; disable with --keep-source)")
+	keepSource := flag.Bool("keep-source", false, "Keep source files after transfer (disables --delete-source)")
+	keepSourceShort := flag.Bool("K", false, "Keep source files after transfer (short)")
 	flag.Parse()
 
 	// Handle short flags
@@ -59,8 +60,8 @@ func main() {
 	if *verboseShort {
 		*verbose = true
 	}
-	if *deleteSourceShort {
-		*deleteSource = true
+	if *keepSourceShort {
+		*keepSource = true
 	}
 	if *parallelShort != 2 {
 		*parallel = *parallelShort
@@ -124,7 +125,7 @@ func main() {
 		Parallel:      *parallel,
 		VirusScan:     *virusScan && !*virusScanOff,
 		VirusScanSkip: *virusScanOff,
-		DeleteSource:  *deleteSource || *deleteSourceShort,
+		DeleteSource:  *deleteSource && !(*keepSource || *keepSourceShort),
 	})
 
 	if report.Failed > 0 {
