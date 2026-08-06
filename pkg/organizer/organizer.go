@@ -20,31 +20,30 @@ import (
 	"github.com/jevonx/audioTransfer/pkg/virusscan"
 )
 
-
-
 // Config holds the pipeline configuration.
 type Config struct {
-	SourceDir   string
-	DestDir     string
-	Host        string
-	TargetBase  string
-	SSHKeyPath  string
-	DryRun      bool
-	Verbose     bool
-	Force       bool
-	Interactive bool
-	Verify      bool
-	LocalOnly   bool
-	Methods     []string
-	Parallel    int
-	VirusScan   bool // pre-transfer virus scan (default true)
+	SourceDir     string
+	DestDir       string
+	Host          string
+	TargetBase    string
+	SSHKeyPath    string
+	DryRun        bool
+	Verbose       bool
+	Force         bool
+	Interactive   bool
+	Verify        bool
+	LocalOnly     bool
+	Methods       []string
+	Parallel      int
+	VirusScan     bool // pre-transfer virus scan (default true)
 	VirusScanSkip bool // --no-virus-scan override
+	DeleteSource  bool // delete source files after successful transfer (opt-in; never in dry-run)
 }
 
 // CheckpointEntry holds the checkpoint state for a single book.
 type CheckpointEntry struct {
 	Identity       *models.BookIdentity
-	TransferStatus string    // "transferred" or "local"
+	TransferStatus string // "transferred" or "local"
 	MethodUsed     string
 	TransferredAt  time.Time
 	FilesCount     int
@@ -174,6 +173,7 @@ func RunTransfer(cfg Config) *models.TransferReport {
 	fmt.Printf("[2/5] Analyzing metadata for %d books...\n", len(books))
 
 	var matched []bookWithID
+	var resumedBooks []string
 	for i, book := range books {
 		fmt.Printf("  [%d/%d] %s\n", i+1, len(books), book.Name)
 
@@ -189,20 +189,18 @@ func RunTransfer(cfg Config) *models.TransferReport {
 			// Verify source files haven't changed
 			currentSize, currentModTime := bookSourceStat(book)
 			if currentSize == entry.SourceSize && currentModTime.Equal(entry.SourceModTime) {
-				// Book is already transferred and source files are unchanged — skip re-processing
+				// Already transferred in a previous run and source unchanged —
+				// count as "resumed", not as newly transferred.
 				result := models.TransferResult{
 					SourceName: book.Name,
 					Identity:   entry.Identity,
-					Status:     entry.TransferStatus,
+					Status:     "resumed",
 					FilesCount: entry.FilesCount,
 					MethodUsed: entry.MethodUsed,
 				}
 				report.Results = append(report.Results, result)
-				if entry.TransferStatus == "local" {
-					report.Local++
-				} else {
-					report.Transferred++
-				}
+				report.Resumed++
+				resumedBooks = append(resumedBooks, book.Name)
 				continue
 			}
 		}
@@ -264,7 +262,7 @@ func RunTransfer(cfg Config) *models.TransferReport {
 	}
 
 	if len(matched) == 0 {
-		if report.Transferred > 0 || report.Local > 0 {
+		if report.Transferred > 0 || report.Local > 0 || report.Resumed > 0 {
 			// Every book was already handled via the checkpoint fast-path —
 			// nothing left to match/transfer, but this is success, not failure.
 			report.PrintSummary()
@@ -276,14 +274,35 @@ func RunTransfer(cfg Config) *models.TransferReport {
 
 	// Phase 3: Confirm plan
 	fmt.Printf("\n[3/5] Transfer plan (%d books):\n", len(matched))
+	deletePlanned := false
 	for _, m := range matched {
 		fmt.Printf("  %s\n", m.identity.TargetPath())
 		fmt.Printf("    %d audio files, %d cover files\n",
 			len(m.book.AudioFiles), len(m.book.CoverFiles))
+		if cfg.DeleteSource && !cfg.DryRun {
+			if paths := deleteFootprint(m.book, cfg); len(paths) > 0 {
+				deletePlanned = true
+				fmt.Println("    → delete source after transfer:")
+				for _, p := range paths {
+					fmt.Printf("        %s\n", p)
+				}
+			}
+		}
+	}
+
+	if len(resumedBooks) > 0 {
+		fmt.Printf("\n  Resumed (already transferred in a previous run): %d\n", len(resumedBooks))
+		for _, name := range resumedBooks {
+			fmt.Printf("    %s\n", name)
+		}
 	}
 
 	if !cfg.DryRun && !cfg.Force && cfg.Interactive {
-		fmt.Print("\n  Proceed with transfer? (y/N): ")
+		prompt := "\n  Proceed with transfer? (y/N): "
+		if cfg.DeleteSource && deletePlanned {
+			prompt = "\n  Proceed with transfer and delete source files? (y/N): "
+		}
+		fmt.Print(prompt)
 		reader := bufio.NewReader(os.Stdin)
 		response, _ := reader.ReadString('\n')
 		if strings.ToLower(strings.TrimSpace(response)) != "y" {
@@ -499,6 +518,12 @@ func RunTransfer(cfg Config) *models.TransferReport {
 		verifyTransfers(report, cfg)
 	}
 
+	// Phase 5b: delete successfully transferred source files (opt-in, never dry-run)
+	if cfg.DeleteSource && !cfg.DryRun {
+		deleteSourceFiles(cfg, matched, report)
+		deleteEligibleZips(cfg, matched, report)
+	}
+
 	// Count failures — only if book has no success result (verify already incremented failed, reset here)
 	report.Failed = 0
 	for _, m := range matched {
@@ -649,11 +674,11 @@ func resumeSkip(client transfer.TransferClient, book *models.BookSource, identit
 // resolveIdentity resolves a book identity from parsed info + optional API enrichment.
 func resolveIdentity(parsed *models.ParsedInfo, book *models.BookSource, cfg Config) *models.BookIdentity {
 	identity := &models.BookIdentity{
-		Title:          parsed.Title,
-		Author:         parsed.Author,
-		Series:         parsed.Series,
-		SeriesPosition: parsed.SeriesPosition,
-		Confidence:     parsed.Confidence,
+		Title:           parsed.Title,
+		Author:          parsed.Author,
+		Series:          parsed.Series,
+		SeriesPosition:  parsed.SeriesPosition,
+		Confidence:      parsed.Confidence,
 		MetadataSources: []string{"filename"},
 	}
 

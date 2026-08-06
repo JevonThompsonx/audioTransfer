@@ -15,6 +15,7 @@ type BookSource struct {
 	CoverFiles   []string // List of cover image paths
 	IsSingleFile bool     // True if just one .m4b/.mp3 file
 	IsFromZip    bool     // True if extracted from zip
+	ZipPath      string   // source .zip this book was extracted from ("" when not a zip)
 	AuthorDir    string   // the top-level source-root entry name that contains this book (used to disambiguate the parser's parent-name-as-author heuristic when a book sits multiple directory levels below its true author folder)
 }
 
@@ -73,24 +74,27 @@ func (b *BookIdentity) TargetPath() string {
 
 // TransferResult holds the result of transferring one book.
 type TransferResult struct {
-	SourceName string
-	Identity   *BookIdentity
-	Status     string // pending, transferred, skipped, failed, unmatched, local
-	Error      string
-	FilesCount int
-	TotalBytes int64
-	MethodUsed string
+	SourceName    string
+	Identity      *BookIdentity
+	Status        string // pending, transferred, skipped, failed, unmatched, local, resumed
+	Error         string
+	FilesCount    int
+	TotalBytes    int64
+	MethodUsed    string
+	SourceDeleted bool // true when --delete-source removed this book's local source
 }
 
 // TransferReport holds summary of a transfer session.
 type TransferReport struct {
 	Total        int
 	Transferred  int
+	Resumed      int // books already transferred in a previous run (checkpoint fast-path)
 	Skipped      int
 	Failed       int
 	Unmatched    int
 	Local        int
 	Infected     int // books skipped due to virus detection
+	Deleted      int // books whose local source was removed by --delete-source
 	Results      []TransferResult
 	MethodsTried []string
 }
@@ -103,10 +107,14 @@ func (r *TransferReport) PrintSummary() {
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Printf("  Total books scanned : %d\n", r.Total)
 	fmt.Printf("  Transferred (remote): %d\n", r.Transferred)
+	fmt.Printf("  Resumed (already transferred): %d\n", r.Resumed)
 	fmt.Printf("  Copied (local)      : %d\n", r.Local)
 	fmt.Printf("  Skipped             : %d\n", r.Skipped)
 	fmt.Printf("  Failed              : %d\n", r.Failed)
 	fmt.Printf("  Unmatched           : %d\n", r.Unmatched)
+	if r.Deleted > 0 {
+		fmt.Printf("  Deleted (source removed) : %d\n", r.Deleted)
+	}
 	if r.Infected > 0 {
 		fmt.Printf("  INFECTED (skipped)  : %d\n", r.Infected)
 	}

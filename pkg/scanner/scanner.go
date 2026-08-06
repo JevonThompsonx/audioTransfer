@@ -320,6 +320,7 @@ func extractAndScanZip(zipPath string) []*models.BookSource {
 	extracted := ScanDirectory(ScanDirConfiguration{SourceDir: tmpDir, ExtractZips: false})
 	for _, b := range extracted {
 		b.IsFromZip = true
+		b.ZipPath = zipPath
 		if b.Name != stem {
 			b.Name = stem + "/" + b.Name
 		}

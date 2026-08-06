@@ -299,10 +299,10 @@ func TestOpenLibraryOverridesLowConfidenceAuthor(t *testing.T) {
 	os.WriteFile(bookFile, make([]byte, 1000), 0644)
 
 	book := &models.BookSource{
-		Name:       "Red Rising",
-		Path:       bookDir,
+		Name:         "Red Rising",
+		Path:         bookDir,
 		IsSingleFile: false,
-		AudioFiles: []string{bookFile},
+		AudioFiles:   []string{bookFile},
 	}
 
 	parentName := "Red Rising"
@@ -421,6 +421,58 @@ func TestCheckpointRoundTrip_Multiple(t *testing.T) {
 	}
 }
 
+func TestCheckpointFastPathCountsResumed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, "qbit")
+	os.MkdirAll(src, 0755)
+	bookFile := filepath.Join(src, "Test Author - Test Book.mp3")
+	os.WriteFile(bookFile, make([]byte, 1000), 0644)
+	fi, _ := os.Stat(bookFile)
+
+	cp := &Checkpoint{Books: map[string]*CheckpointEntry{
+		bookFile: { // checkpointKey(book) == AudioFiles[0]
+			Identity:       &models.BookIdentity{Title: "Test Book", Author: "Test Author"},
+			TransferStatus: "transferred",
+			MethodUsed:     "native-ssh",
+			FilesCount:     1,
+			SourceSize:     fi.Size(),
+			SourceModTime:  fi.ModTime(),
+		},
+	}}
+	path, _ := CheckpointPath()
+	if err := SaveCheckpoint(path, cp); err != nil {
+		t.Fatalf("SaveCheckpoint failed: %v", err)
+	}
+
+	report := RunTransfer(Config{SourceDir: src, DestDir: filepath.Join(home, "organized"),
+		DryRun: true, Force: true})
+	if report.Total != 1 || report.Resumed != 1 || report.Transferred != 0 {
+		t.Fatalf("got Total=%d Resumed=%d Transferred=%d, want 1/1/0",
+			report.Total, report.Resumed, report.Transferred)
+	}
+	if len(report.Results) != 1 || report.Results[0].Status != "resumed" {
+		t.Fatalf("fast-path result status = %v, want single result with Status %q",
+			report.Results, "resumed")
+	}
+}
+
+func TestDryRunCountsSkipped(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, "qbit")
+	os.MkdirAll(src, 0755)
+	bookFile := filepath.Join(src, "Test Author - Test Book.mp3")
+	os.WriteFile(bookFile, make([]byte, 1000), 0644)
+
+	report := RunTransfer(Config{SourceDir: src, DestDir: filepath.Join(home, "organized"),
+		DryRun: true, Force: true})
+	if report.Total != 1 || report.Skipped != 1 || report.Transferred != 0 {
+		t.Fatalf("got Total=%d Skipped=%d Transferred=%d, want 1/1/0",
+			report.Total, report.Skipped, report.Transferred)
+	}
+}
+
 // StubTransferClient is a test double implementing the TransferClient interface
 type StubTransferClient struct {
 	remoteExists    bool
@@ -428,10 +480,10 @@ type StubTransferClient struct {
 	connectionFails bool
 }
 
-func (s *StubTransferClient) MethodName() string { return "stub" }
+func (s *StubTransferClient) MethodName() string        { return "stub" }
 func (s *StubTransferClient) Preflight() (bool, string) { return true, "stub ready" }
-func (s *StubTransferClient) Connect() bool { return true }
-func (s *StubTransferClient) Disconnect() {}
+func (s *StubTransferClient) Connect() bool             { return true }
+func (s *StubTransferClient) Disconnect()               {}
 func (s *StubTransferClient) TransferBook(audioFiles, coverFiles []string, targetSubpath string) bool {
 	return true
 }

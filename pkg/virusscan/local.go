@@ -155,10 +155,9 @@ func (s *LocalScanner) ScanDir(path string, recursive bool) (*ScanReport, error)
 	return report, nil
 }
 
-// scanBatch runs clamscan on a batch of files.
+// scanBatch runs clamscan/clamdscan on a batch of files.
 func (s *LocalScanner) scanBatch(files []string) ([]ScanResult, error) {
-	args := []string{"--infected", "--no-summary", "--no-follow-symlinks"}
-	args = append(args, files...)
+	args := s.batchArgs(files)
 
 	cmd := exec.Command(s.BinPath, args...)
 	out, err := cmd.Output()
@@ -166,9 +165,20 @@ func (s *LocalScanner) scanBatch(files []string) ([]ScanResult, error) {
 	// Exit code 1 = infected files found (not an error)
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		if exitErr.ExitCode() != 1 {
-			return nil, fmt.Errorf("clamscan exit code %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
+			return nil, fmt.Errorf("clam exit code %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
 		}
 	}
 
 	return parseClamOutput(string(out)), nil
+}
+
+// batchArgs builds the argument list for a batch scan. clamdscan does NOT
+// support --no-follow-symlinks (clamscan-only option); it follows symlinks by
+// default, which is acceptable — only pass the flag in clamscan mode.
+func (s *LocalScanner) batchArgs(files []string) []string {
+	args := []string{"--infected", "--no-summary"}
+	if !s.UseDaemon {
+		args = append(args, "--no-follow-symlinks")
+	}
+	return append(args, files...)
 }

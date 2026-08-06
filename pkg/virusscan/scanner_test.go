@@ -107,3 +107,33 @@ func TestScanReport_PrintSummary(t *testing.T) {
 	// Should not panic
 	report.PrintSummary()
 }
+
+func TestScanBatchArgs_DaemonMode(t *testing.T) {
+	s := &LocalScanner{BinPath: "/usr/bin/clamdscan", UseDaemon: true}
+	args := s.batchArgs([]string{"/tmp/a.mp3"})
+	if args[0] != "--infected" || args[1] != "--no-summary" {
+		t.Fatalf("unexpected leading args: %v", args)
+	}
+	for _, a := range args {
+		if a == "--no-follow-symlinks" {
+			t.Fatal("clamdscan mode must never receive --no-follow-symlinks")
+		}
+	}
+	if len(args) < 3 || args[len(args)-1] != "/tmp/a.mp3" {
+		t.Errorf("file args must be appended last: %v", args)
+	}
+}
+
+func TestScanBatchArgs_ClamscanMode(t *testing.T) {
+	s := &LocalScanner{BinPath: "/usr/bin/clamscan", UseDaemon: false}
+	args := s.batchArgs([]string{"/tmp/a.mp3"})
+	seen := false
+	for _, a := range args {
+		if a == "--no-follow-symlinks" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Error("clamscan mode must include --no-follow-symlinks")
+	}
+}
