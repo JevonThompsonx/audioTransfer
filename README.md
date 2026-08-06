@@ -151,13 +151,15 @@ Realm of the Elderlings (Robin Hobb)/     ← Author: Robin Hobb, Series: Realm 
 - Uses SSH connection multiplexing (ControlMaster/ControlPersist) so multiple file transfers and verification checks reuse one authenticated connection instead of reconnecting per operation — faster, and avoids remote SSH server connection-rate limits under heavy use (e.g. large libraries or high `--parallel` values)
 
 ### local (fallback)
-- Copies files to a local directory
+- Copies files to the `--dest` directory (default `~/qbit/organized`)
 - Preserves the same `Author/Series/Title` structure
 - Always available — no dependencies
 - Use `rsync` afterwards for manual transfer:
   ```bash
   rsync -avzP ~/qbit/organized/ root@roadman:/mnt/media/audiobooks/
   ```
+
+> **Note:** The local method targets `--dest`, *not* the remote `--target` path. A previous bug passed the remote target (`/mnt/media/audiobooks`) to the local client, so SSH-fallback runs wrote the library into a local `/mnt/media/audiobooks` directory instead of `~/qbit/organized`. Fixed in `pkg/organizer/organizer.go`.
 
 ### Fallback Chain
 

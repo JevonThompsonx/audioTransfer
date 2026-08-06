@@ -17,6 +17,7 @@ import (
 	"github.com/jevonx/audioTransfer/pkg/scanner"
 	"github.com/jevonx/audioTransfer/pkg/transfer"
 	"github.com/jevonx/audioTransfer/pkg/utils"
+	"github.com/jevonx/audioTransfer/pkg/virusscan"
 )
 
 
@@ -36,6 +37,8 @@ type Config struct {
 	LocalOnly   bool
 	Methods     []string
 	Parallel    int
+	VirusScan   bool // pre-transfer virus scan (default true)
+	VirusScanSkip bool // --no-virus-scan override
 }
 
 // CheckpointEntry holds the checkpoint state for a single book.
@@ -52,6 +55,12 @@ type CheckpointEntry struct {
 // Checkpoint holds the checkpoint state for all books processed.
 type Checkpoint struct {
 	Books map[string]*CheckpointEntry // keyed by book.Path (absolute source path)
+}
+
+// bookWithID pairs a book source with its resolved identity.
+type bookWithID struct {
+	book     *models.BookSource
+	identity *models.BookIdentity
 }
 
 // CheckpointPath returns the path to the checkpoint file in the config directory.
@@ -134,7 +143,7 @@ func checkpointKey(book *models.BookSource) string {
 func RunTransfer(cfg Config) *models.TransferReport {
 	report := &models.TransferReport{}
 
-	fmt.Printf("\n[1/4] Scanning %s...\n", cfg.SourceDir)
+	fmt.Printf("\n[1/5] Scanning %s...\n", cfg.SourceDir)
 
 	books := scanner.ScanDirectory(scanner.ScanDirConfiguration{
 		SourceDir:   cfg.SourceDir,
@@ -162,12 +171,7 @@ func RunTransfer(cfg Config) *models.TransferReport {
 	}
 
 	// Phase 2: Parse + Match
-	fmt.Printf("[2/4] Analyzing metadata for %d books...\n", len(books))
-
-	type bookWithID struct {
-		book     *models.BookSource
-		identity *models.BookIdentity
-	}
+	fmt.Printf("[2/5] Analyzing metadata for %d books...\n", len(books))
 
 	var matched []bookWithID
 	for i, book := range books {
@@ -271,7 +275,7 @@ func RunTransfer(cfg Config) *models.TransferReport {
 	}
 
 	// Phase 3: Confirm plan
-	fmt.Printf("\n[3/4] Transfer plan (%d books):\n", len(matched))
+	fmt.Printf("\n[3/5] Transfer plan (%d books):\n", len(matched))
 	for _, m := range matched {
 		fmt.Printf("  %s\n", m.identity.TargetPath())
 		fmt.Printf("    %d audio files, %d cover files\n",
@@ -289,7 +293,7 @@ func RunTransfer(cfg Config) *models.TransferReport {
 	}
 
 	if cfg.DryRun {
-		fmt.Println("\n[4/4] DRY RUN - no files transferred")
+		fmt.Println("\n[4/5] DRY RUN - no files transferred")
 		for _, m := range matched {
 			result := models.TransferResult{
 				SourceName: m.book.Name,
@@ -303,8 +307,27 @@ func RunTransfer(cfg Config) *models.TransferReport {
 		return report
 	}
 
-	// Phase 4: Transfer
-	fmt.Printf("\n[4/4] Transferring %d books...\n", len(matched))
+	// Phase 4: Virus scan (if enabled)
+	if cfg.VirusScan && !cfg.VirusScanSkip {
+		fmt.Printf("\n[4/5] Pre-transfer virus scan...\n")
+		var scanReport *virusscan.ScanReport
+		matched, scanReport = runPreTransferScan(matched, cfg)
+		if scanReport != nil {
+			fmt.Printf("  Scanned %d files: %d clean, %d infected, %d errors (%v)\n",
+				scanReport.Total, scanReport.Clean, scanReport.Infected, scanReport.Errors, scanReport.Duration)
+			if scanReport.Infected > 0 {
+				report.Infected = scanReport.Infected
+			}
+		}
+		if len(matched) == 0 {
+			fmt.Println("  All books skipped (infected).")
+			report.PrintSummary()
+			return report
+		}
+	}
+
+	// Phase 5: Transfer
+	fmt.Printf("\n[5/5] Transferring %d books...\n", len(matched))
 
 	methodList := cfg.Methods
 	if len(methodList) == 0 {
@@ -316,7 +339,11 @@ func RunTransfer(cfg Config) *models.TransferReport {
 	}
 
 	for _, method := range methodList {
-		client := transfer.NewClient(method, cfg.Host, cfg.TargetBase, cfg.SSHKeyPath, 22)
+		target := cfg.TargetBase
+		if method == "local" && cfg.DestDir != "" {
+			target = cfg.DestDir
+		}
+		client := transfer.NewClient(method, cfg.Host, target, cfg.SSHKeyPath, 22)
 
 		fmt.Printf("\n  --- Trying method: %s ---\n", client.MethodName())
 		report.MethodsTried = append(report.MethodsTried, method)
@@ -496,9 +523,13 @@ func RunTransfer(cfg Config) *models.TransferReport {
 
 	// Hint for local-only
 	if report.Local > 0 && report.Transferred == 0 {
+		localDir := cfg.DestDir
+		if localDir == "" {
+			localDir = cfg.TargetBase
+		}
 		fmt.Println("\n  All books organized locally.")
 		fmt.Printf("  Manual transfer:\n    rsync -avzP %s/ root@%s:%s/\n",
-			cfg.TargetBase, cfg.Host, cfg.TargetBase)
+			localDir, cfg.Host, cfg.TargetBase)
 	}
 
 	return report
@@ -535,7 +566,11 @@ func verifyTransfers(report *models.TransferReport, cfg Config) {
 
 		client, ok := clients[method]
 		if !ok {
-			client = transfer.NewClient(method, cfg.Host, cfg.TargetBase, cfg.SSHKeyPath, 22)
+			target := cfg.TargetBase
+			if method == "local" && cfg.DestDir != "" {
+				target = cfg.DestDir
+			}
+			client = transfer.NewClient(method, cfg.Host, target, cfg.SSHKeyPath, 22)
 			if !client.Connect() {
 				utils.Warn.Printf("  Could not connect to verify via %s; skipping remaining %s verifications", method, method)
 				continue
@@ -637,8 +672,16 @@ func resolveIdentity(parsed *models.ParsedInfo, book *models.BookSource, cfg Con
 			identity.MetadataSources = append(identity.MetadataSources, "openlibrary")
 			identity.Confidence += 15
 
-			if identity.Author == "" && ol.Author != "" {
-				identity.Author = ol.Author
+			// Override author when current author is low-confidence (from parent
+			// dir guess, not filename parsing). Parent-dir heuristic maxes out at
+			// confidence 45-50; filename-based patterns score >= 65. Threshold at50
+			// catches the "Red Rising" parent-dir-as-author bug without clobbering
+			// legitimate filename-parsed authors like "Brandon Sanderson".
+			if ol.Author != "" {
+				if identity.Author == "" || identity.Confidence <= 50 {
+					identity.Author = ol.Author
+					identity.Confidence = max(identity.Confidence, 85)
+				}
 			}
 			if identity.Title == "" && ol.Title != "" {
 				identity.Title = ol.Title
@@ -768,4 +811,61 @@ func isSeriesPattern(name string) bool {
 	}
 	before := strings.TrimSpace(name[:lastOpen])
 	return !strings.Contains(before, " - ")
+}
+
+// runPreTransferScan scans all matched books' files for viruses.
+// Returns only clean books (infected ones are filtered out).
+func runPreTransferScan(matched []bookWithID, cfg Config) ([]bookWithID, *virusscan.ScanReport) {
+	// Collect all file paths
+	var allPaths []string
+	for _, m := range matched {
+		allPaths = append(allPaths, m.book.AudioFiles...)
+		allPaths = append(allPaths, m.book.CoverFiles...)
+	}
+
+	if len(allPaths) == 0 {
+		return matched, nil
+	}
+
+	// Create scanner
+	scanner := virusscan.NewScanner("local", cfg.Host, 22, "root", cfg.SSHKeyPath)
+
+	// Run scan
+	report, err := scanner.ScanFiles(allPaths)
+	if err != nil {
+		utils.Warn.Printf("Virus scan error: %v", err)
+		return matched, nil
+	}
+
+	// Build set of infected files
+	infectedFiles := map[string]string{} // file → virus name
+	for _, r := range report.Results {
+		if r.Infected {
+			infectedFiles[r.File] = r.VirusName
+			utils.Error.Printf("  INFECTED: %s → %s", r.File, r.VirusName)
+		}
+	}
+
+	if len(infectedFiles) == 0 {
+		return matched, report
+	}
+
+	// Filter out infected books
+	var clean []bookWithID
+	for _, m := range matched {
+		bookClean := true
+		for _, f := range append(m.book.AudioFiles, m.book.CoverFiles...) {
+			if _, ok := infectedFiles[f]; ok {
+				bookClean = false
+				break
+			}
+		}
+		if bookClean {
+			clean = append(clean, m)
+		} else {
+			utils.Warn.Printf("  SKIPPED (infected): %s", m.book.Name)
+		}
+	}
+
+	return clean, report
 }

@@ -34,6 +34,8 @@ func main() {
 	methods := flag.String("methods", "", "Transfer methods (comma-separated: native-ssh,local)")
 	parallel := flag.Int("parallel", 2, "Max concurrent transfers (default 2 — SSH multiplexing removes connection overhead, but concurrent large files still share your upload bandwidth)")
 	parallelShort := flag.Int("P", 2, "Max concurrent transfers (short)")
+	virusScan := flag.Bool("virus-scan", true, "Pre-transfer ClamAV scan (default on)")
+	virusScanOff := flag.Bool("no-virus-scan", false, "Disable pre-transfer virus scan")
 	flag.Parse()
 
 	// Handle short flags
@@ -102,19 +104,21 @@ func main() {
 	isInteractive := *interactive || (!*dryRun && !*force)
 
 	report := organizer.RunTransfer(organizer.Config{
-		SourceDir:   *sourceDir,
-		DestDir:     *destDir,
-		Host:        *host,
-		TargetBase:  *targetBase,
-		SSHKeyPath:  *sshKey,
-		DryRun:      *dryRun || *dryRunShort,
-		Verbose:     *verbose || *verboseShort,
-		Force:       *force || *forceShort,
-		Interactive: isInteractive,
-		Verify:      *verify || *verifyShort,
-		LocalOnly:   *localOnly || *localOnlyShort,
-		Methods:     methodList,
-		Parallel:    *parallel,
+		SourceDir:     *sourceDir,
+		DestDir:       *destDir,
+		Host:          *host,
+		TargetBase:    *targetBase,
+		SSHKeyPath:    *sshKey,
+		DryRun:        *dryRun || *dryRunShort,
+		Verbose:       *verbose || *verboseShort,
+		Force:         *force || *forceShort,
+		Interactive:   isInteractive,
+		Verify:        *verify || *verifyShort,
+		LocalOnly:     *localOnly || *localOnlyShort,
+		Methods:       methodList,
+		Parallel:      *parallel,
+		VirusScan:     *virusScan && !*virusScanOff,
+		VirusScanSkip: *virusScanOff,
 	})
 
 	if report.Failed > 0 {

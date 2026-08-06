@@ -90,6 +90,7 @@ type TransferReport struct {
 	Failed       int
 	Unmatched    int
 	Local        int
+	Infected     int // books skipped due to virus detection
 	Results      []TransferResult
 	MethodsTried []string
 }
@@ -106,6 +107,9 @@ func (r *TransferReport) PrintSummary() {
 	fmt.Printf("  Skipped             : %d\n", r.Skipped)
 	fmt.Printf("  Failed              : %d\n", r.Failed)
 	fmt.Printf("  Unmatched           : %d\n", r.Unmatched)
+	if r.Infected > 0 {
+		fmt.Printf("  INFECTED (skipped)  : %d\n", r.Infected)
+	}
 	if len(r.MethodsTried) > 0 {
 		fmt.Printf("  Transfer methods    : %s\n", strings.Join(r.MethodsTried, " -> "))
 	}
