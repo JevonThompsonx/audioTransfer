@@ -48,6 +48,15 @@ Rows whose `bookId` no longer exists in `books` (leftovers from earlier item mer
 4. **Single-book series** (e.g. `Afterworlds`, `Hatchet`, `The Last Unicorn`): these are metadata-driven standalone titles with a `series` tag set; not ABS misreads, left untouched.
 5. A handful of series still mirror author names (e.g. `Elora Bishop & Bridget Essex`, `Cynthia Dane & Hildred Billings`). Unlike the purged 209, these have metadata-driven series tags and co-author pairings; low priority, left for review.
 
+## Duplicate removal (2026-08-05, follow-up)
+
+**`She Comes First`** by Ian Kerner existed as an exact duplicate: two folders with 6 byte-identical MP3s + cover (`/audiobooks/Ian Kerner/She Comes First/` and `/audiobooks/Ian Kerner/Ian Kerner  - She Comes First The Grammer of Oral Sex/`).
+
+- Full-library md5 scan of all 3018 audio files found **only this one duplicate pair**.
+- Neither copy had listening progress, so the canonical clean-path copy was kept (`She Comes First/`); the misnamed duplicate folder was removed (API item delete + on-disk `rm -rf`).
+- **Zodiac Academy** `The Reckoning (Part 1/2)` (386MB / 435MB) and **Shield Hero Vol 4** (two ~199MB rips) are *different files* (distinct rips / legit part-numbering), not duplicates — left intact.
+- Library now 935 items / 3012 audio files / 0 duplicates / 0 missing; all 11 listening-progress rows preserved.
+
 ## Rollback
 ```bash
 # Restore the pre-audit DB (container stopped):
