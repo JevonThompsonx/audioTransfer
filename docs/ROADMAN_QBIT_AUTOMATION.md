@@ -48,13 +48,15 @@ backstop: qbit-postprocess.timer (systemd, every 5 min) sweeps leftovers
 - Torrent peer port `15061`; anonymous mode; DHT/LSD/PeX off; encryption on.
 - Completion hook (`autorun_program` + `autorun_enabled`):
   `/usr/local/bin/qbit-postprocess.sh "%N" "%F" "%I"`
-- Proxy: **disabled**, credentials scrubbed. The flatpak's privado SOCKS5 creds
-  were rejected by the proxy server ("User was rejected" from both aphrodite
-  and roadman — creds look expired/rotated), so they were removed from the
-  config entirely. To re-enable later: WebUI → Options → Connection → proxy,
-  or
-  `curl -b <cookie> -X POST http://127.0.0.1:8081/api/v2/app/setPreferences --data-urlencode 'json={"proxy_type":2,"proxy_ip":"...","proxy_port":1080,"proxy_username":"...","proxy_password":"...","proxy_auth_enabled":true}'`
-  (verify egress first: `curl -x socks5h://user:pass@host:1080 https://api.ipify.org`).
+- Proxy: **enabled** — SOCKS5 `sfo.socks.privado.io:1080` (privado), auth on,
+  tracker + peer connections + DNS routed through it. The flatpak's stored
+  creds were initially rejected by the proxy server (transient), so the proxy
+  was first disabled and the creds scrubbed; a later retest succeeded and the
+  proxy was re-enabled with the same creds. If downloads stall, verify egress
+  first:
+  `curl -x socks5h://user:pass@sfo.socks.privado.io:1080 https://api.ipify.org`
+  then check `proxy_type` via `/api/v2/app/preferences` (5.1 expects the string
+  enum `"SOCKS5"`, not the numeric value).
 
 ## Virus scan behavior (fail closed)
 
