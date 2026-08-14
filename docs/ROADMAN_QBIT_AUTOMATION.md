@@ -39,19 +39,32 @@ backstop: qbit-postprocess.timer (systemd, every 5 min) sweeps leftovers
 
 - Address `0.0.0.0`, port `8081`, username `admin`, generated password
   (`/root/.qbit-webui-password`).
-- CSRF + clickjacking protection on; ban 5 failed logins / 3600 s; auth required
-  even from localhost.
+- CSRF + clickjacking protection on; ban 5 failed logins / 3600 s; auth
+  required even from localhost (`bypass_local_auth=false` — the API returns
+  403 to unauthenticated local callers; the post-process wrapper logs in with
+  the stored credentials).
 - Save path `/mnt/media/qbit`; temp path `/mnt/media/qbit-temp`; incomplete
   files get `.!qB` suffix; preallocation on.
 - Torrent peer port `15061`; anonymous mode; DHT/LSD/PeX off; encryption on.
-- Completion hook (`autorun_program`):
+- Completion hook (`autorun_program` + `autorun_enabled`):
   `/usr/local/bin/qbit-postprocess.sh "%N" "%F" "%I"`
-- Proxy: currently **disabled**. The flatpak's privado SOCKS5 creds were rejected
-  by the proxy server ("User was rejected" from both aphrodite and roadman —
-  creds look expired/rotated). To re-enable: WebUI → Options → Connection →
-  proxy, or
+- Proxy: **disabled**, credentials scrubbed. The flatpak's privado SOCKS5 creds
+  were rejected by the proxy server ("User was rejected" from both aphrodite
+  and roadman — creds look expired/rotated), so they were removed from the
+  config entirely. To re-enable later: WebUI → Options → Connection → proxy,
+  or
   `curl -b <cookie> -X POST http://127.0.0.1:8081/api/v2/app/setPreferences --data-urlencode 'json={"proxy_type":2,"proxy_ip":"...","proxy_port":1080,"proxy_username":"...","proxy_password":"...","proxy_auth_enabled":true}'`
   (verify egress first: `curl -x socks5h://user:pass@host:1080 https://api.ipify.org`).
+
+## Virus scan behavior (fail closed)
+
+The pre-transfer scan is **fail closed**: a book is blocked if any of its files
+is infected OR could not be scanned (ClamAV error — permissions, daemon down,
+unreadable file). Blocked books are logged (`INFECTED` / `SCAN ERROR (blocked)`
+/ `SKIPPED (unsafe)`), never moved to the library, and their source files are
+left in place for manual review. A scan infrastructure failure blocks all
+books. This means if clamd is down, nothing transfers until it recovers (the
+timer retries every 5 min) — safe by design.
 
 ## How the post-process works
 
