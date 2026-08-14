@@ -64,6 +64,20 @@ func parseClamOutput(output string) []ScanResult {
 	return results
 }
 
+// parseScanSummary extracts the "Scanned files: N" total from a clamscan
+// summary block. Returns 0 when the summary is absent (e.g. --no-summary).
+func parseScanSummary(output string) int {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Scanned files:") {
+			var n int
+			fmt.Sscanf(strings.TrimPrefix(line, "Scanned files:"), "%d", &n)
+			return n
+		}
+	}
+	return 0
+}
+
 // ParseDuration parses a clamscan duration string like "0:03:42"
 func ParseDuration(s string) time.Duration {
 	parts := strings.Split(s, ":")

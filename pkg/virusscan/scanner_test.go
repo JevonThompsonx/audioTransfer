@@ -100,8 +100,25 @@ func TestSelectBinary_OnlyClamscan(t *testing.T) {
 
 func TestSelectBinary_Neither(t *testing.T) {
 	bin, daemon := selectBinary("", "", false)
-	if daemon || bin != "clamscan" {
-		t.Errorf("expected default clamscan when nothing found, got %s daemon=%v", bin, daemon)
+	if daemon || bin != "" {
+		t.Errorf("expected empty binary when nothing found, got %q daemon=%v", bin, daemon)
+	}
+}
+
+func TestParseScanSummary(t *testing.T) {
+	output := `----------- SCAN SUMMARY -----------
+Known viruses: 3287027
+Engine version: 1.4.2
+Scanned directories: 3
+Scanned files: 42
+Infected files: 1
+Data scanned: 100.0 MB
+Time: 10.0 sec`
+	if n := parseScanSummary(output); n != 42 {
+		t.Errorf("expected 42, got %d", n)
+	}
+	if n := parseScanSummary("no summary here"); n != 0 {
+		t.Errorf("expected 0 for absent summary, got %d", n)
 	}
 }
 
@@ -120,14 +137,19 @@ func TestFillCleanResults_EmptyResults(t *testing.T) {
 }
 
 func TestFillCleanResults_KeepsExistingResults(t *testing.T) {
-	// If the scan already found an infection, do not clobber it with clean marks.
+	// An infected file found in one batch must be preserved, while clean files
+	// from other batches (which --infected prints nothing for) are still added.
 	report := &ScanReport{Total: 2, Results: []ScanResult{{File: "/a.mp3", Infected: true, VirusName: "EICAR"}}}
 	fillCleanResults([]string{"/a.mp3", "/b.mp3"}, report)
-	if len(report.Results) != 1 {
-		t.Fatalf("expected existing results preserved, got %d", len(report.Results))
+	if len(report.Results) != 2 {
+		t.Fatalf("expected infected + clean, got %d results: %+v", len(report.Results), report.Results)
 	}
 	if !report.Results[0].Infected {
 		t.Error("existing infected result must be preserved")
+	}
+	clean := report.Results[1]
+	if clean.File != "/b.mp3" || clean.Infected || clean.Error != "" {
+		t.Errorf("expected /b.mp3 marked clean, got %+v", clean)
 	}
 }
 
@@ -200,11 +222,11 @@ func TestScanBatchArgs_ClamscanMode(t *testing.T) {
 	}
 	found := map[string]bool{}
 	for _, a := range args {
-		if a == "--follow-file-symlinks=0" || a == "--follow-dir-symlinks=0" {
+		if a == "--follow-file-symlinks=no" || a == "--follow-dir-symlinks=no" {
 			found[a] = true
 		}
 	}
-	if !found["--follow-file-symlinks=0"] || !found["--follow-dir-symlinks=0"] {
+	if !found["--follow-file-symlinks=no"] || !found["--follow-dir-symlinks=no"] {
 		t.Errorf("clamscan mode must pass the supported no-follow flags: %v", args)
 	}
 }

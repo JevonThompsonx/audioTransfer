@@ -339,7 +339,7 @@ func RunTransfer(cfg Config) *models.TransferReport {
 			}
 		}
 		if len(matched) == 0 {
-			fmt.Println("  All books skipped (infected).")
+			fmt.Println("  All books skipped (unsafe — infected or scan error).")
 			report.PrintSummary()
 			return report
 		}
@@ -839,7 +839,9 @@ func isSeriesPattern(name string) bool {
 }
 
 // runPreTransferScan scans all matched books' files for viruses.
-// Returns only clean books (infected ones are filtered out).
+// Returns only safe books; any book containing an infected file OR a file the
+// scanner could not check (scan error) is filtered out — fail closed, so an
+// unscanned file never reaches the library.
 func runPreTransferScan(matched []bookWithID, cfg Config) ([]bookWithID, *virusscan.ScanReport) {
 	// Collect all file paths
 	var allPaths []string
@@ -858,39 +860,53 @@ func runPreTransferScan(matched []bookWithID, cfg Config) ([]bookWithID, *viruss
 	// Run scan
 	report, err := scanner.ScanFiles(allPaths)
 	if err != nil {
-		utils.Warn.Printf("Virus scan error: %v", err)
-		return matched, nil
+		// Scan infrastructure failure: block everything rather than move
+		// unscanned files into the library.
+		utils.Error.Printf("Virus scan failed, blocking all books: %v", err)
+		return nil, report
 	}
 
-	// Build set of infected files
-	infectedFiles := map[string]string{} // file → virus name
+	clean, _ := filterUnsafeBooks(matched, report)
+	return clean, report
+}
+
+// filterUnsafeBooks returns the books whose files all scanned clean, dropping
+// any book that contains an infected file or a file that failed to scan (fail
+// closed: unscanned files must not reach the library). Returns the clean books
+// and the number of books dropped.
+func filterUnsafeBooks(matched []bookWithID, report *virusscan.ScanReport) ([]bookWithID, int) {
+	unsafe := map[string]string{} // file → reason
 	for _, r := range report.Results {
 		if r.Infected {
-			infectedFiles[r.File] = r.VirusName
+			unsafe[r.File] = "infected: " + r.VirusName
 			utils.Error.Printf("  INFECTED: %s → %s", r.File, r.VirusName)
+		} else if r.Error != "" {
+			unsafe[r.File] = "scan error: " + r.Error
+			utils.Error.Printf("  SCAN ERROR (blocked): %s → %s", r.File, r.Error)
 		}
 	}
 
-	if len(infectedFiles) == 0 {
-		return matched, report
+	if len(unsafe) == 0 {
+		return matched, 0
 	}
 
-	// Filter out infected books
 	var clean []bookWithID
+	dropped := 0
 	for _, m := range matched {
 		bookClean := true
 		for _, f := range append(m.book.AudioFiles, m.book.CoverFiles...) {
-			if _, ok := infectedFiles[f]; ok {
+			if reason, ok := unsafe[f]; ok {
 				bookClean = false
+				utils.Warn.Printf("  SKIPPED (unsafe): %s — %s", m.book.Name, reason)
 				break
 			}
 		}
 		if bookClean {
 			clean = append(clean, m)
 		} else {
-			utils.Warn.Printf("  SKIPPED (infected): %s", m.book.Name)
+			dropped++
 		}
 	}
 
-	return clean, report
+	return clean, dropped
 }

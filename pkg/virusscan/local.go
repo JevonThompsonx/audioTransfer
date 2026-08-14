@@ -56,7 +56,24 @@ func selectBinary(clamdscanPath, clamscanPath string, daemonUp bool) (bin string
 	if clamscanPath != "" {
 		return clamscanPath, false
 	}
-	return "clamscan", false
+	return "", false
+}
+
+// ensureScannerAvailable re-checks that the selected scanner is still usable
+// right before scanning: clamd may have died since construction, and falling
+// back to clamscan keeps the scan working instead of failing every batch.
+func (s *LocalScanner) ensureScannerAvailable() {
+	if !s.UseDaemon {
+		return
+	}
+	if probe := exec.Command(s.BinPath, "-p", "1:1"); probe.Run() == nil {
+		return
+	}
+	utils.Warn.Printf("clamd not responding mid-scan — falling back to clamscan")
+	if p, err := exec.LookPath("clamscan"); err == nil {
+		s.BinPath = p
+		s.UseDaemon = false
+	}
 }
 
 func (s *LocalScanner) MethodName() string {
@@ -89,6 +106,15 @@ func (s *LocalScanner) ScanFiles(paths []string) (*ScanReport, error) {
 	if len(paths) == 0 {
 		return report, nil
 	}
+
+	if s.BinPath == "" {
+		return nil, fmt.Errorf("no ClamAV scanner found in PATH — install clamscan or clamdscan")
+	}
+
+	// Re-verify daemon liveness right before scanning — clamd may have died
+	// since scanner construction; fall back to clamscan rather than failing
+	// every batch.
+	s.ensureScannerAvailable()
 
 	// Batch files for clamscan (no daemon) — clamdscan can handle more
 	batchSize := 200
@@ -142,7 +168,10 @@ func (s *LocalScanner) ScanDir(path string, recursive bool) (*ScanReport, error)
 	start := time.Now()
 	report := &ScanReport{}
 
-	args := []string{"--infected", "--no-summary"}
+	// Keep the summary block (no --no-summary) so the "Scanned files: N" line
+	// gives an accurate total even when --infected prints nothing for a clean
+	// tree. parseClamOutput skips summary lines.
+	args := []string{"--infected"}
 	if recursive {
 		args = append(args, "-r")
 	}
@@ -159,7 +188,10 @@ func (s *LocalScanner) ScanDir(path string, recursive bool) (*ScanReport, error)
 
 	results := parseClamOutput(string(out))
 	report.Results = results
-	report.Total = len(results)
+	report.Total = parseScanSummary(string(out))
+	if report.Total == 0 {
+		report.Total = len(results) // no summary available — fall back
+	}
 
 	for _, r := range results {
 		if r.Infected {
@@ -182,13 +214,17 @@ func (s *LocalScanner) ScanDir(path string, recursive bool) (*ScanReport, error)
 // fillCleanResults marks scanned paths that produced no parsed output as clean.
 // clamscan/clamdscan with --infected prints only non-clean files, so a fully
 // clean batch yields no lines; without this, reports would show 0 clean files.
-// Paths already represented in report.Results (infected or error) are left as-is.
+// Paths already represented in report.Results (infected or error) are left as-is,
+// so per-file dedup keeps every scanned path accounted for exactly once.
 func fillCleanResults(paths []string, report *ScanReport) {
-	if len(report.Results) != 0 || report.Errors != 0 {
-		return
+	seen := make(map[string]bool, len(report.Results))
+	for _, r := range report.Results {
+		seen[r.File] = true
 	}
 	for _, p := range paths {
-		report.Results = append(report.Results, ScanResult{File: p})
+		if !seen[p] {
+			report.Results = append(report.Results, ScanResult{File: p})
+		}
 	}
 }
 
@@ -216,11 +252,11 @@ func (s *LocalScanner) scanBatch(files []string) ([]ScanResult, error) {
 // default, which is acceptable — only pass the flags in clamscan mode.
 //
 // Note: ClamAV >= 1.4 removed the legacy --no-follow-symlinks flag; the
-// supported spelling is --follow-{file,dir}-symlinks=0 ("never follow").
+// documented spelling is --follow-{file,dir}-symlinks=no ("never follow").
 func (s *LocalScanner) batchArgs(files []string) []string {
 	args := []string{"--infected", "--no-summary"}
 	if !s.UseDaemon {
-		args = append(args, "--follow-file-symlinks=0", "--follow-dir-symlinks=0")
+		args = append(args, "--follow-file-symlinks=no", "--follow-dir-symlinks=no")
 	}
 	return append(args, files...)
 }

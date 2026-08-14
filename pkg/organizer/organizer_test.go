@@ -8,6 +8,7 @@ import (
 
 	"github.com/jevonx/audioTransfer/pkg/models"
 	"github.com/jevonx/audioTransfer/pkg/parser"
+	"github.com/jevonx/audioTransfer/pkg/virusscan"
 )
 
 func TestDisambiguationFix(t *testing.T) {
@@ -648,5 +649,85 @@ func TestResumeSkip_MultipleFiles(t *testing.T) {
 	result := resumeSkip(client, book, identity)
 	if !result {
 		t.Error("resumeSkip should correctly sum multiple files")
+	}
+}
+
+func TestFilterUnsafeBooks_AllClean(t *testing.T) {
+	matched := []bookWithID{
+		{book: &models.BookSource{Name: "A", AudioFiles: []string{"/q/a.mp3"}}},
+		{book: &models.BookSource{Name: "B", AudioFiles: []string{"/q/b.mp3"}}},
+	}
+	report := &virusscan.ScanReport{
+		Results: []virusscan.ScanResult{{File: "/q/a.mp3"}, {File: "/q/b.mp3"}},
+	}
+	clean, dropped := filterUnsafeBooks(matched, report)
+	if len(clean) != 2 || dropped != 0 {
+		t.Fatalf("expected both books kept, got %d clean %d dropped", len(clean), dropped)
+	}
+}
+
+func TestFilterUnsafeBooks_InfectedDropped(t *testing.T) {
+	matched := []bookWithID{
+		{book: &models.BookSource{Name: "Bad", AudioFiles: []string{"/q/bad.mp3"}}},
+		{book: &models.BookSource{Name: "Good", AudioFiles: []string{"/q/good.mp3"}}},
+	}
+	report := &virusscan.ScanReport{
+		Results: []virusscan.ScanResult{
+			{File: "/q/bad.mp3", Infected: true, VirusName: "Eicar-Signature"},
+			{File: "/q/good.mp3"},
+		},
+	}
+	clean, dropped := filterUnsafeBooks(matched, report)
+	if dropped != 1 || len(clean) != 1 {
+		t.Fatalf("expected 1 dropped, 1 clean; got dropped=%d clean=%d", dropped, len(clean))
+	}
+	if clean[0].book.Name != "Good" {
+		t.Errorf("expected Good kept, got %s", clean[0].book.Name)
+	}
+}
+
+func TestFilterUnsafeBooks_ScanErrorFailsClosed(t *testing.T) {
+	// Fail closed: a file the scanner could NOT check (error) must block the
+	// book just like an infection — unscanned files never reach the library.
+	matched := []bookWithID{
+		{book: &models.BookSource{Name: "Unscannable", AudioFiles: []string{"/q/x.mp3"}}},
+	}
+	report := &virusscan.ScanReport{
+		Results: []virusscan.ScanResult{{File: "/q/x.mp3", Error: "clam exit code 2"}},
+	}
+	clean, dropped := filterUnsafeBooks(matched, report)
+	if dropped != 1 || len(clean) != 0 {
+		t.Fatalf("expected book blocked on scan error, got dropped=%d clean=%d", dropped, len(clean))
+	}
+}
+
+func TestFilterUnsafeBooks_CoverInfectedDropped(t *testing.T) {
+	// Infection in a cover file must block the book too.
+	matched := []bookWithID{
+		{book: &models.BookSource{Name: "CoverBad", AudioFiles: []string{"/q/a.mp3"}, CoverFiles: []string{"/q/cover.jpg"}}},
+	}
+	report := &virusscan.ScanReport{
+		Results: []virusscan.ScanResult{{File: "/q/cover.jpg", Infected: true, VirusName: "Eicar-Signature"}},
+	}
+	clean, dropped := filterUnsafeBooks(matched, report)
+	if dropped != 1 || len(clean) != 0 {
+		t.Fatalf("expected book blocked on infected cover, got dropped=%d clean=%d", dropped, len(clean))
+	}
+}
+
+func TestFilterUnsafeBooks_MultiFilePartialError(t *testing.T) {
+	// Multi-file book with one unreadable track: entire book blocked.
+	matched := []bookWithID{
+		{book: &models.BookSource{Name: "Multi", AudioFiles: []string{"/q/t1.mp3", "/q/t2.mp3"}}},
+	}
+	report := &virusscan.ScanReport{
+		Results: []virusscan.ScanResult{
+			{File: "/q/t1.mp3"},
+			{File: "/q/t2.mp3", Error: "access denied"},
+		},
+	}
+	clean, dropped := filterUnsafeBooks(matched, report)
+	if dropped != 1 || len(clean) != 0 {
+		t.Fatalf("expected multi-file book blocked, got dropped=%d clean=%d", dropped, len(clean))
 	}
 }
