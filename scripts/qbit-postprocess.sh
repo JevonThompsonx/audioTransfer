@@ -27,7 +27,12 @@ IDLE_POLL=30
 
 DL_STATES="downloading|forcedDL|metaDL|forcedMetaDL|stalledDL|checkingDL|queuedDL|allocatingDL"
 
-say() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
+say() {
+	# Sanitize before logging: torrent names/paths are attacker-influenced.
+	local safe_msg
+	safe_msg=$(printf '%s' "$*" | tr -cd '[:print:]\t' | head -c 512)
+	echo "[$(date '+%F %T')] $safe_msg" >> "$LOG"
+}
 
 cleanup() { rm -f "$COOKIE" "$TORRENTS"; }
 trap cleanup EXIT

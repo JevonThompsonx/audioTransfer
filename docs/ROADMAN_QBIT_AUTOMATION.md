@@ -132,10 +132,32 @@ the ABS UI.
 - qBittorrent runs as **root** (matches the rest of roadman: SSH root, all
   containers root). WebUI is password-protected with fail-ban, but it IS bound
   to `0.0.0.0` — keep the password strong and treat the LAN as semi-trusted.
+  Optional hardening paths: run qbittorrent-nox under a dedicated user
+  (service template supports `qbittorrent-nox@<user>`), or add a firewall rule
+  restricting port 8081 to the tailnet
+  (`nft ... tcp dport 8081 ip saddr 100.64.0.0/10 accept`), or front the WebUI
+  with a TLS-terminating reverse proxy (caddy already runs on roadman).
 - ClamAV AppArmor profile (`/etc/apparmor.d/usr.sbin.clamd`) was extended with
   read-only access to `/mnt/media` so clamd can scan downloads
   (`/mnt/media/ r,` + `/mnt/media/** r,`). Backup of the original:
   `/root/usr.sbin.clamd.bak`.
+- ClamAV blocks encrypted archives (`ArchiveBlockEncrypted true` in
+  `/etc/clamav/clamd.conf`) — password-protected zips in torrents are flagged
+  (`Heuristics.Encrypted.Zip`) and fail closed.
+- Localhost API access requires authentication (`bypass_local_auth=false`).
+- The WebUI password is rotated on demand; currently in `/root/.qbit-webui-password`
+  (0600). Rotate with:
+  ```bash
+  ssh roadman   # or ssh -J templetonbak roadman while the direct path is down
+  # login with the current password, then:
+  curl -s -b <cookie> -X POST http://127.0.0.1:8081/api/v2/app/setPreferences \
+    --data-urlencode "json={\"web_ui_password\":\"NEWPASS\"}"
+  ```
+- WebUI serves plain HTTP (no TLS). Session cookies are NOT marked Secure
+  (that would break HTTP logins); if you add TLS via a reverse proxy, also set
+  `WebUI\SecureCookie=true`.
 - qBittorrent API returns the configured proxy password in `preferences`; the
-  API is localhost + auth only. If you re-enable the proxy, be aware the
-  password round-trips through the WebUI API.
+  proxy is currently disabled and its credentials were scrubbed, so nothing
+  sensitive is exposed there.
+- Torrent names/paths are sanitized (printable chars only, truncated) before
+  being written to `/var/log/qbit-postprocess.log`.
