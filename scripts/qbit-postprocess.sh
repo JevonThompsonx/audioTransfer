@@ -25,6 +25,10 @@ LOGIN_RETRIES=5
 IDLE_WAIT_MAX=1800
 IDLE_POLL=30
 
+# audiotransfer needs $HOME for its checkpoint + metadata cache; systemd-run
+# wrapper contexts (timer, qBittorrent autorun) may not provide it.
+export HOME=/root
+
 DL_STATES="downloading|forcedDL|metaDL|forcedMetaDL|stalledDL|checkingDL|queuedDL|allocatingDL"
 
 say() {
