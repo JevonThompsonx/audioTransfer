@@ -157,11 +157,16 @@ main() {
       say "files still present at '$content_path'; keeping torrent"
     fi
   else
-    # backstop mode: sweep completed torrents whose files no longer exist
+    # backstop mode: sweep torrents that COMPLETED (progress >= 1.0) and whose
+    # files no longer exist. Never delete a torrent that never finished
+    # downloading (stalled/failed with 0% progress) — its files are "missing"
+    # only because nothing was ever written.
     if [ -s "$TORRENTS" ]; then
-      local h p
-      while IFS=$'\t' read -r h p; do
+      local h p prog
+      while IFS=$'\t' read -r h p prog; do
         [ -z "$h" ] && continue
+        # progress is a float like 0.0 or 1.0; only sweep fully-completed ones
+        awk -v prog="$prog" 'BEGIN{exit !(prog >= 0.999)}' || continue
         if ! path_has_files "$p"; then
           case " $hashes " in *" $h "*) delete_torrent "$h" ;; esac
         fi
@@ -172,7 +177,7 @@ try:
 except Exception:
     sys.exit(0)
 for x in t:
-    print(x.get("hash", "") + "\t" + str(x.get("content_path", "")))
+    print(x.get("hash", "") + "\t" + str(x.get("content_path", "")) + "\t" + str(x.get("progress", 0)))
 ' < "$TORRENTS")
     fi
   fi
