@@ -406,14 +406,29 @@ func RunTransfer(cfg Config) *models.TransferReport {
 
 				fmt.Printf("\n  [%s] %s\n", client.MethodName(), m.identity.TargetPath())
 
+				// Render the enriched metadata to a temp metadata.json and add it to
+				// the cover file list, so it lands in the book's target folder in the
+				// same transfer as the audio (both clients copy by basename). Skipped
+				// in dry-run (this phase never runs then) and when enrichment found
+				// nothing confident.
+				audioFiles := m.book.AudioFiles
+				coverFiles := append([]string{}, m.book.CoverFiles...)
+				metaJSON, cleanupMeta := metadataJSONFile(m.identity)
+				if metaJSON != "" {
+					coverFiles = append(coverFiles, metaJSON)
+				}
+				if cleanupMeta != nil {
+					defer cleanupMeta()
+				}
+
 				var success bool
-				if resumeSkip(client, m.book, m.identity) {
+				if resumeSkip(client, m.book, m.identity, coverFiles[len(m.book.CoverFiles):]) {
 					utils.Info.Printf("  Skip (already on remote): %s", m.identity.TargetPath())
 					success = true
 				} else {
 					success = client.TransferBook(
-						m.book.AudioFiles,
-						m.book.CoverFiles,
+						audioFiles,
+						coverFiles,
 						m.identity.TargetPath(),
 					)
 				}
@@ -422,7 +437,7 @@ func RunTransfer(cfg Config) *models.TransferReport {
 					SourceName: m.book.Name,
 					Identity:   m.identity,
 					Status:     status,
-					FilesCount: len(m.book.AudioFiles) + len(m.book.CoverFiles),
+					FilesCount: len(audioFiles) + len(coverFiles),
 					MethodUsed: method,
 				}
 
@@ -650,10 +665,17 @@ func verifyWithRetry(client transfer.TransferClient, targetPath string, attempts
 
 // resumeSkip reports whether a book's files already exist on the remote target
 // with matching total size, so an interrupted run can resume without
-// re-uploading books that already completed.
-func resumeSkip(client transfer.TransferClient, book *models.BookSource, identity *models.BookIdentity) bool {
+// re-uploading books that already completed. extraFiles (e.g. the rendered
+// metadata.json) are included in the local size so a remote folder that lacks
+// them is correctly detected as incomplete.
+func resumeSkip(client transfer.TransferClient, book *models.BookSource, identity *models.BookIdentity, extraFiles []string) bool {
 	var localSize int64
 	for _, f := range append(append([]string{}, book.AudioFiles...), book.CoverFiles...) {
+		if fi, err := os.Stat(f); err == nil {
+			localSize += fi.Size()
+		}
+	}
+	for _, f := range extraFiles {
 		if fi, err := os.Stat(f); err == nil {
 			localSize += fi.Size()
 		}
@@ -669,6 +691,29 @@ func resumeSkip(client transfer.TransferClient, book *models.BookSource, identit
 	}
 	remoteSize, _ := v["total_size"].(int64)
 	return remoteSize == localSize
+}
+
+// metadataJSONFile renders the enriched metadata to a temp metadata.json file
+// (when enrichment produced anything) and returns its path plus a cleanup
+// function. The file is added to the transfer file list so it lands in the
+// book's target folder in the same transfer as the audio — both the SSH and
+// local clients copy arbitrary file paths by basename (cover files already
+// work that way). Returns ("", nil) when there is nothing to write.
+func metadataJSONFile(identity *models.BookIdentity) (string, func()) {
+	if identity == nil || identity.Enriched == nil {
+		return "", nil
+	}
+	tmpDir, err := os.MkdirTemp("", "audiotransfer-meta-")
+	if err != nil {
+		utils.Warn.Printf("  Could not create temp dir for metadata.json: %v", err)
+		return "", nil
+	}
+	if err := metadata.WriteMetadataJSON(tmpDir, identity.Enriched); err != nil {
+		utils.Warn.Printf("  Could not write metadata.json: %v", err)
+		os.RemoveAll(tmpDir)
+		return "", nil
+	}
+	return filepath.Join(tmpDir, "metadata.json"), func() { os.RemoveAll(tmpDir) }
 }
 
 // resolveIdentity resolves a book identity from parsed info + optional API enrichment.
@@ -690,11 +735,13 @@ func resolveIdentity(parsed *models.ParsedInfo, book *models.BookSource, cfg Con
 		identity.Confidence = max(identity.Confidence, 50)
 	}
 
-	// Try Open Library API enrichment
+	// Try provider-chain enrichment (Audible -> iTunes -> OpenLibrary). The
+	// parsed series position is passed along so volume-mismatched provider
+	// results (e.g. "Vol. 08" matched to "Volume 17") are rejected.
 	if cfg.lookupMetadata() && (identity.Title != "" || identity.Author != "") {
-		ol := metadata.Lookup(identity.Title, identity.Author)
-		if ol != nil {
-			identity.MetadataSources = append(identity.MetadataSources, "openlibrary")
+		enriched := metadata.LookupEnriched(identity.Title, identity.Author, identity.Series, identity.SeriesPosition)
+		if enriched != nil {
+			identity.MetadataSources = append(identity.MetadataSources, enriched.Source)
 			identity.Confidence += 15
 
 			// Override author when current author is low-confidence (from parent
@@ -702,18 +749,22 @@ func resolveIdentity(parsed *models.ParsedInfo, book *models.BookSource, cfg Con
 			// confidence 45-50; filename-based patterns score >= 65. Threshold at50
 			// catches the "Red Rising" parent-dir-as-author bug without clobbering
 			// legitimate filename-parsed authors like "Brandon Sanderson".
-			if ol.Author != "" {
+			if enriched.Author != "" {
 				if identity.Author == "" || identity.Confidence <= 50 {
-					identity.Author = ol.Author
+					identity.Author = enriched.Author
 					identity.Confidence = max(identity.Confidence, 85)
 				}
 			}
-			if identity.Title == "" && ol.Title != "" {
-				identity.Title = ol.Title
+			if identity.Title == "" && enriched.Title != "" {
+				identity.Title = enriched.Title
 			}
-			if ol.Year > 0 {
+			if enriched.Year > 0 {
 				identity.Confidence += 5
 			}
+
+			// Keep the full enriched metadata so the transfer phase can write an
+			// ABS metadata.json into the book's target folder.
+			identity.Enriched = enriched
 		}
 	}
 

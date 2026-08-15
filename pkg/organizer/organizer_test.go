@@ -522,7 +522,7 @@ func TestResumeSkip_LocalSizeZero(t *testing.T) {
 		remoteTotalSize: 1000,
 	}
 
-	result := resumeSkip(client, book, identity)
+	result := resumeSkip(client, book, identity, nil)
 	if result {
 		t.Error("resumeSkip should return false when local size is 0")
 	}
@@ -551,7 +551,7 @@ func TestResumeSkip_RemoteDoesNotExist(t *testing.T) {
 		remoteExists: false, // Remote doesn't exist
 	}
 
-	result := resumeSkip(client, book, identity)
+	result := resumeSkip(client, book, identity, nil)
 	if result {
 		t.Error("resumeSkip should return false when remote doesn't exist")
 	}
@@ -581,7 +581,7 @@ func TestResumeSkip_SizesMatch(t *testing.T) {
 		remoteTotalSize: 1000, // Matches local size
 	}
 
-	result := resumeSkip(client, book, identity)
+	result := resumeSkip(client, book, identity, nil)
 	if !result {
 		t.Error("resumeSkip should return true when sizes match")
 	}
@@ -611,7 +611,7 @@ func TestResumeSkip_SizesMismatch(t *testing.T) {
 		remoteTotalSize: 2000, // Doesn't match local size
 	}
 
-	result := resumeSkip(client, book, identity)
+	result := resumeSkip(client, book, identity, nil)
 	if result {
 		t.Error("resumeSkip should return false when sizes don't match")
 	}
@@ -646,7 +646,7 @@ func TestResumeSkip_MultipleFiles(t *testing.T) {
 		remoteTotalSize: 1000,
 	}
 
-	result := resumeSkip(client, book, identity)
+	result := resumeSkip(client, book, identity, nil)
 	if !result {
 		t.Error("resumeSkip should correctly sum multiple files")
 	}

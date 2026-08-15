@@ -39,16 +39,27 @@ type BookMetadata struct {
 	Author         string
 	Series         string
 	SeriesPosition float64
-	ASIN           string
-	Narrator       string
-	Year           int
-	Description    string
-	CoverURL       string
-	OLWorkKey      string
-	OLAuthorKey    string
-	Confidence     int
-	Source         string
-	Raw            map[string]interface{}
+	// SecondarySeries/SecondarySeriesPosition hold the provider's secondary
+	// series (e.g. audnex seriesSecondary — a larger universe the book also
+	// belongs to). Both are included in the ABS metadata.json series array.
+	SecondarySeries         string
+	SecondarySeriesPosition float64
+	ASIN                    string
+	Narrator                string
+	Year                    int
+	Description             string
+	CoverURL                string
+	Subtitle                string
+	Publisher               string
+	Language                string
+	Tags                    []string
+	Genres                  []string
+	ISBN                    string
+	OLWorkKey               string
+	OLAuthorKey             string
+	Confidence              int
+	Source                  string
+	Raw                     map[string]interface{}
 }
 
 // BookIdentity is the final resolved book identity for transfer.
@@ -59,6 +70,11 @@ type BookIdentity struct {
 	SeriesPosition  float64
 	Confidence      int
 	MetadataSources []string
+	// Enriched holds the full provider-enriched metadata used to write the
+	// ABS metadata.json file into the transferred book folder. It is never
+	// persisted to the checkpoint (json:"-") — the checkpoint only stores the
+	// identity fields above, keeping checkpoint.json lean and stable.
+	Enriched *BookMetadata `json:"-"`
 }
 
 // TargetPath builds the target path: author/series/book or author/book.

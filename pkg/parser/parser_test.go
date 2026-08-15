@@ -327,6 +327,152 @@ func TestIsTitleLike(t *testing.T) {
 	}
 }
 
+func TestParseName_QBitBracketedSeries(t *testing.T) {
+	// qBittorrent pattern: "Title [Series, Book N]" — the brackets must be
+	// stripped from the title and parsed into Series + SeriesPosition.
+	tests := []struct {
+		name            string
+		filename        string
+		expectedTitle   string
+		expectedSeries  string
+		expectedPos     float64
+		minConfidence   int
+	}{
+		{
+			name:           "BracketedSeriesBook",
+			filename:       "Sweet Obsession [Dark Olympus Series, Book 8]",
+			expectedTitle:  "Sweet Obsession",
+			expectedSeries: "Dark Olympus Series",
+			expectedPos:    8,
+			minConfidence:  70,
+		},
+		{
+			name:           "BracketedSeriesBookSameAsTitle",
+			filename:       "Assistant to the Villain [Assistant to the Villain, Book 1]",
+			expectedTitle:  "Assistant to the Villain",
+			expectedSeries: "Assistant to the Villain",
+			expectedPos:    1,
+			minConfidence:  70,
+		},
+		{
+			name:           "BracketedSeriesBookWithAmpersand",
+			filename:       "The Dawn of the Cursed Queen [Gods & Monsters, Book 3]",
+			expectedTitle:  "The Dawn of the Cursed Queen",
+			expectedSeries: "Gods & Monsters",
+			expectedPos:    3,
+			minConfidence:  70,
+		},
+		{
+			name:           "BracketedSeriesBookWithSubtitle",
+			filename:       "Some Book [A Series, Book 2 - A Subtitle]",
+			expectedTitle:  "Some Book",
+			expectedSeries: "A Series",
+			expectedPos:    2,
+			minConfidence:  70,
+		},
+		{
+			name:           "BracketedSeriesDecimalPosition",
+			filename:       "Novella [A Series, Book 1.5]",
+			expectedTitle:  "Novella",
+			expectedSeries: "A Series",
+			expectedPos:    1.5,
+			minConfidence:  70,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := ParseName(tt.filename, "")
+			if parsed.Title != tt.expectedTitle {
+				t.Errorf("Title: got %q, want %q", parsed.Title, tt.expectedTitle)
+			}
+			if parsed.Series != tt.expectedSeries {
+				t.Errorf("Series: got %q, want %q", parsed.Series, tt.expectedSeries)
+			}
+			if parsed.SeriesPosition != tt.expectedPos {
+				t.Errorf("SeriesPosition: got %v, want %v", parsed.SeriesPosition, tt.expectedPos)
+			}
+			if parsed.Confidence < tt.minConfidence {
+				t.Errorf("Confidence too low: got %d, want >= %d", parsed.Confidence, tt.minConfidence)
+			}
+		})
+	}
+}
+
+func TestParseName_NoBracketTrailingSeries(t *testing.T) {
+	// No-bracket variant: "Title Series, Book N" (e.g. qBittorrent's
+	// "House of Flame and Shadow Crescent City, Book 3").
+	tests := []struct {
+		name            string
+		filename        string
+		expectedTitle   string
+		expectedSeries  string
+		expectedPos     float64
+	}{
+		{
+			name:           "TrailingSeriesBook",
+			filename:       "House of Flame and Shadow Crescent City, Book 3",
+			expectedTitle:  "House of Flame and Shadow",
+			expectedSeries: "Crescent City",
+			expectedPos:    3,
+		},
+		{
+			name:           "TrailingSeriesDecimal",
+			filename:       "A Long Book Title Series Name, Book 1.5",
+			expectedTitle:  "A Long Book Title",
+			expectedSeries: "Series Name",
+			expectedPos:    1.5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := ParseName(tt.filename, "")
+			if parsed.Title != tt.expectedTitle {
+				t.Errorf("Title: got %q, want %q", parsed.Title, tt.expectedTitle)
+			}
+			if parsed.Series != tt.expectedSeries {
+				t.Errorf("Series: got %q, want %q", parsed.Series, tt.expectedSeries)
+			}
+			if parsed.SeriesPosition != tt.expectedPos {
+				t.Errorf("SeriesPosition: got %v, want %v", parsed.SeriesPosition, tt.expectedPos)
+			}
+		})
+	}
+}
+
+func TestParseName_NoBracketTrailingSeriesConservative(t *testing.T) {
+	// When the split is ambiguous the title must be left as-is — real title
+	// words are never stripped.
+	tests := []struct {
+		name          string
+		filename      string
+		expectedTitle string
+	}{
+		// One-word series candidate ("Reborn") — can't tell it apart from the title.
+		{"SingleWordSeriesCandidate", "The Dragon Reborn, Book 3", "The Dragon Reborn, Book 3"},
+		// One-word pre-comma part with a series suffix — conservative no-split.
+		{"ShortTitle", "Mine, Book 1", "Mine, Book 1"},
+		// Stopword-led candidates ("and Roses") — no split.
+		{"StopwordSeriesCandidate", "A Court of Mist and Fury A Court of Thorns and Roses, Book 2", "A Court of Mist and Fury A Court of Thorns and Roses, Book 2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := ParseName(tt.filename, "")
+			if parsed.Title != tt.expectedTitle {
+				t.Errorf("Title: got %q, want %q (untouched)", parsed.Title, tt.expectedTitle)
+			}
+			if parsed.Series != "" {
+				t.Errorf("Series: got %q, want empty (untouched)", parsed.Series)
+			}
+			if parsed.SeriesPosition != 0 {
+				t.Errorf("SeriesPosition: got %v, want 0 (untouched)", parsed.SeriesPosition)
+			}
+		})
+	}
+}
+
 func TestParseSeriesPosition(t *testing.T) {
 	tests := []struct {
 		name             string

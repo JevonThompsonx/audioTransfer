@@ -114,6 +114,10 @@ func ParseName(name string, parentName string) *models.ParsedInfo {
 	// Second pass: if regex gives us more info, use it
 	regexParse(clean, info)
 
+	// Third pass: qBittorrent-style trailing series patterns
+	// ("Title [Series, Book N]", "Title Series, Book N")
+	parseQBitSeries(info)
+
 	// Post-process: inherit author from parent if parent looks like author name.
 	// Skip if the series was already set and matches the parent name (avoids
 	// duplicating a series name as the author for "Series_Title ..." filenames).
@@ -212,8 +216,30 @@ func ParseName(name string, parentName string) *models.ParsedInfo {
 	return info
 }
 
+// qbitBracketRe matches the qBittorrent bracketed pattern
+// "Title [Series, Book N]" (optionally "Title [Series, Book N - Subtitle]").
+var qbitBracketRe = regexp.MustCompile(`^(.+?)\s*\[([^\[\]]+?),\s*(?:Book|Bk)\s*(\d+(?:\.\d+)?)(?:\s*[-–—]\s*[^\[\]]+)?\]$`)
+
 // heuristicParse handles non-standard patterns that regex misses.
 func heuristicParse(clean string, info *models.ParsedInfo) {
+	// qBittorrent bracketed pattern: "Title [Series, Book N]" (optionally
+	// "Title [Series, Book N - Subtitle]"). Must run BEFORE the " - " split
+	// below, which would otherwise mangle titles whose subtitle carries a dash.
+	if m := qbitBracketRe.FindStringSubmatch(clean); m != nil {
+		titlePart := strings.TrimSpace(m[1])
+		seriesName := strings.TrimSpace(m[2])
+		// Don't apply when the pre-bracket part still looks like "Author - Title".
+		if seriesName != "" && !strings.ContainsAny(titlePart, "-–—") {
+			if v, err := strconv.ParseFloat(m[3], 64); err == nil {
+				info.Title = titlePart
+				info.Series = seriesName
+				info.SeriesPosition = v
+				info.Confidence = maxInt(info.Confidence, 70)
+				return
+			}
+		}
+	}
+
 	// Pattern: "Series Name (Author)" — author in last parenthetical
 	if lastOpen := strings.LastIndex(clean, "("); lastOpen >= 0 {
 		lastClose := strings.LastIndex(clean, ")")
@@ -339,6 +365,117 @@ func regexParse(clean string, info *models.ParsedInfo) {
 		break
 	}
 }
+
+// parseQBitSeries handles qBittorrent naming patterns where the series and
+// position trail the title (the brackets otherwise pollute ABS book titles):
+//
+//	"Title [Series, Book N]"             -> Title, Series, SeriesPosition
+//	"Title [Series, Book N - Subtitle]"  -> Title, Series, SeriesPosition (subtitle dropped)
+//	"Title Series, Book N"               -> Title, Series, SeriesPosition (no brackets)
+//
+// The no-bracket form is inherently ambiguous ("House of Flame and Shadow
+// Crescent City, Book 3" -> series "Crescent City"), so it is only applied
+// when the split is conservative: the series candidate must be >= 2 words,
+// must not start with a stopword, and the remaining title must not end with
+// one. When in doubt the title is left untouched — real title words are never
+// stripped.
+func parseQBitSeries(info *models.ParsedInfo) {
+	if info.Series != "" || info.SeriesPosition != 0 || info.Title == "" {
+		return
+	}
+
+	// Bracketed form: "Title [Series, Book N]" / "Title [Series, Book N - Subtitle]"
+	// (also reached here when the pre-bracket part contained an "Author - " prefix
+	// that heuristicParse already stripped).
+	if m := qbitBracketRe.FindStringSubmatch(info.Title); m != nil {
+		titlePart := strings.TrimSpace(m[1])
+		seriesName := strings.TrimSpace(m[2])
+		// Don't apply when the pre-bracket part still looks like "Author - Title".
+		if seriesName != "" && !strings.ContainsAny(titlePart, "-–—") {
+			if v, err := strconv.ParseFloat(m[3], 64); err == nil {
+				info.Title = titlePart
+				info.Series = seriesName
+				info.SeriesPosition = v
+				if info.Confidence < 70 {
+					info.Confidence = 70
+				}
+				return
+			}
+		}
+	}
+
+	// No-bracket form: trailing "Series, Book N"
+	if newTitle, seriesName, pos, ok := extractTrailingSeriesBook(info.Title); ok {
+		info.Title = newTitle
+		info.Series = seriesName
+		info.SeriesPosition = pos
+		if info.Confidence < 65 {
+			info.Confidence = 65
+		}
+	}
+}
+
+// extractTrailingSeriesBook splits a trailing "Series, Book N" suffix off a
+// title, e.g. "House of Flame and Shadow Crescent City, Book 3" ->
+// ("House of Flame and Shadow", "Crescent City", 3). The split point is
+// ambiguous, so every word-boundary split is evaluated conservatively:
+//
+//   - the series candidate must be >= 2 words and must not start with a
+//     stopword ("of", "and", "the", ...) — series names rarely do;
+//   - the remaining title must not end with a stopword;
+//   - among valid splits the shortest series (longest preserved title) wins,
+//     so real title words are never needlessly stripped.
+func extractTrailingSeriesBook(title string) (newTitle, series string, pos float64, ok bool) {
+	suffixRe := regexp.MustCompile(`(?i)^(.+),\s*(?:Book|Bk)\s*(\d+(?:\.\d+)?)$`)
+	m := suffixRe.FindStringSubmatch(strings.TrimSpace(title))
+	if m == nil {
+		return "", "", 0, false
+	}
+	v, err := strconv.ParseFloat(m[2], 64)
+	if err != nil {
+		return "", "", 0, false
+	}
+	fields := strings.Fields(m[1])
+	if len(fields) < 3 {
+		return "", "", 0, false // need room for a title and a >= 2-word series
+	}
+	bestWords := -1 // shortest series wins (largest preserved title)
+	bestTitle, bestSeries := "", ""
+	for i := 1; i <= len(fields)-2; i++ {
+		seriesWords := fields[i:]
+		if len(seriesWords) < 2 {
+			continue
+		}
+		titleWords := fields[:i]
+		if stopword(strings.ToLower(seriesWords[0])) {
+			continue
+		}
+		if stopword(strings.ToLower(titleWords[len(titleWords)-1])) {
+			continue
+		}
+		if bestWords == -1 || len(seriesWords) < bestWords {
+			bestWords = len(seriesWords)
+			bestTitle = strings.Join(titleWords, " ")
+			bestSeries = strings.Join(seriesWords, " ")
+		}
+	}
+	if bestWords == -1 {
+		return "", "", 0, false
+	}
+	return bestTitle, bestSeries, v, true
+}
+
+// stopWords are words that never begin a series name or end a title in the
+// trailing-series heuristic — splitting on them would strip real title words.
+var stopWords = map[string]bool{
+	"the": true, "a": true, "an": true, "of": true, "and": true,
+	"in": true, "on": true, "at": true, "to": true, "for": true,
+	"with": true, "from": true, "by": true, "or": true, "it": true,
+	"is": true, "no": true, "not": true, "as": true,
+	"my": true, "our": true, "your": true, "her": true, "his": true, "their": true,
+}
+
+func stopword(w string) bool { return stopWords[w] }
 
 // parseParentContext extracts series/author from the parent directory name.
 func parseParentContext(info *models.ParsedInfo, parentName string) {

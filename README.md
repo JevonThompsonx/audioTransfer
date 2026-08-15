@@ -78,10 +78,8 @@ Options:
 ## Architecture
 
 ```
-Source dir ──→ Scan ──→ Parse ──→ [OpenLibrary API] ──→ Match ──→ Transfer
-                                                         │
-                                                         ├── native-ssh (scp)
-                                                         └── local (file copy)
+Source dir ──→ Scan ──→ Parse ──→ [Provider chain] ──→ Match ──→ Transfer + metadata.json
+                                    Audible → iTunes → OpenLibrary
 ```
 
 ### Pipeline Phases
@@ -90,8 +88,21 @@ Source dir ──→ Scan ──→ Parse ──→ [OpenLibrary API] ──→ 
 |-------|-------------|
 | **1. Scan** | Recursively discovers audiobook files (.m4b, .mp3, .m4a, .flac, etc.), cover art (.jpg, .png), and extracts .zip archives |
 | **2. Parse** | Hybrid regex + heuristic engine extracts author, title, series, series position from filenames and parent directories |
-| **3. Match** | Resolves canonical book identity; optionally enriches via OpenLibrary API |
+| **3. Match** | Resolves canonical book identity via the metadata provider chain (below) with strict scored matching |
 | **4. Transfer** | Copies files to target via SSH/SCP (native) or local file copy; falls back through methods on failure |
+| **5. metadata.json** | A full ABS-compatible `metadata.json` (title, authors, narrators, series, tags, genres, description, publisher, year, language, ISBN, ASIN) is written into every organized book folder so Audiobookshelf scans new books fully matched — no more empty tags/descriptions |
+
+## Metadata Provider Chain
+
+Every provider result is **scored** against the parsed title/author before being accepted (title token-overlap ≥ 0.6, author match ≥ 0.66 with comma/&/;-separated segment matching), and matching is **volume-aware** — a result that is a different volume of the same series (e.g. "Vol. 08" vs "Volume 17") is rejected. Results are cached 30 days.
+
+| Provider | What it provides | Notes |
+|----------|------------------|-------|
+| **Audible** (catalog search → `audnex.us` per-ASIN enrichment) | Full metadata: title, subtitle, authors, narrators, publisher, description, release year, cover, tags + genres, primary + secondary series with positions, language, ISBN, ASIN | Primary — same source Audiobookshelf uses. audnex.us is a free community proxy, best-effort per ASIN |
+| **iTunes** (Apple search, `media=audiobook`) | Title, author, description, year | Fallback — no tags/series data |
+| **OpenLibrary** (search.json) | Title, author, year, cover | Last resort — sparse |
+
+## Parser: Filename Patterns
 
 ### Target Structure
 
@@ -137,6 +148,8 @@ The hybrid parser handles these naming conventions:
 | **Heuristic: `Series (Author)`** | `Realm of the Elderlings (Robin Hobb)/` | Author = Robin Hobb, Series = Realm of the Elderlings |
 | **Heuristic: `Title - Author` (reverse)** | `The Shining - Stephen King.m4b` | Detects reverse pattern, assigns correctly |
 | **`Series_Title -- Subtitle [ASIN]`** | `Embodied Activism_ Engaging the Body...--A Practical Guide... [B0BFJRTQNF].m4b` | Series = "Embodied Activism", Title parsed, ASIN extracted |
+| **`Title [Series, Book N]`** | `Sweet Obsession [Dark Olympus Series, Book 8].m4b` | Title = "Sweet Obsession", Series = "Dark Olympus Series", Position = 8 (also handles `[Series, Book N - Subtitle]`) |
+| **`Title Series, Book N`** (no brackets) | `House of Flame and Shadow Crescent City, Book 3.m4b` | Title = "House of Flame and Shadow", Series = "Crescent City", Position = 3 (conservative: series must be ≥2 words, no stopword edges) |
 
 ### Series Inheritance
 
