@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/jevonx/audioTransfer/pkg/models"
+	"github.com/jevonx/audioTransfer/pkg/parser"
 	"github.com/jevonx/audioTransfer/pkg/utils"
 )
 
@@ -128,12 +129,19 @@ func scanDirEntry(abs, name, authorDir string, books *[]*models.BookSource) {
 		*books = append(*books, subBooks...)
 	} else {
 		// Flat book dir or series dir with direct audio.
-		// Prefer the richest audio filename as the book name when a single
-		// audio file sits directly in this directory — its stem often contains
-		// the full title, author, and ASIN that the directory name does not.
+		// Prefer the richer of (dir name, audio file stem) as the book name:
+		// a single "Book.mp3" stem often carries the full title/author/ASIN the
+		// dir name lacks, but the inverse also happens ("[M4B] Andy Weir -
+		// Project Hail Mary/" containing "Project Hail Mary.m4b") — pick the
+		// name that parses with higher confidence.
 		bookName := name
 		if hasDirectAudio && len(audioFiles) == 1 {
-			bookName = strings.TrimSuffix(filepath.Base(audioFiles[0]), filepath.Ext(audioFiles[0]))
+			fileStem := strings.TrimSuffix(filepath.Base(audioFiles[0]), filepath.Ext(audioFiles[0]))
+			dirInfo := parser.ParseName(name, "")
+			fileInfo := parser.ParseName(fileStem, "")
+			if fileInfo.Confidence > dirInfo.Confidence {
+				bookName = fileStem
+			}
 		}
 		book := &models.BookSource{
 			Name:       bookName,

@@ -740,9 +740,27 @@ func resolveIdentity(parsed *models.ParsedInfo, book *models.BookSource, cfg Con
 	// results (e.g. "Vol. 08" matched to "Volume 17") are rejected.
 	if cfg.lookupMetadata() && (identity.Title != "" || identity.Author != "") {
 		enriched := metadata.LookupEnriched(identity.Title, identity.Author, identity.Series, identity.SeriesPosition)
+		if enriched == nil && identity.Author != "" {
+			// The parsed "author" may itself be the title (JP/KR releases like
+			// "Solo Leveling - Chugong"), which makes the author-scored lookup
+			// fail. Retry author-less so the provider chain can still identify
+			// the book; the title/author swap below then fixes the identity.
+			enriched = metadata.LookupEnriched(identity.Title, "", identity.Series, identity.SeriesPosition)
+		}
 		if enriched != nil {
 			identity.MetadataSources = append(identity.MetadataSources, enriched.Source)
 			identity.Confidence += 15
+
+			// "Title - Author" ordering (common in JP/KR releases, e.g.
+			// "Solo Leveling - Chugong"): the parsed author is actually the
+			// book title. When the enriched title equals the parsed author,
+			// adopt the enriched identity wholesale.
+			if enriched.Title != "" && identity.Author != "" && identity.Title != "" &&
+				strings.EqualFold(strings.TrimSpace(identity.Author), strings.TrimSpace(enriched.Title)) {
+				identity.Author = enriched.Author
+				identity.Title = enriched.Title
+				identity.Confidence = max(identity.Confidence, 85)
+			}
 
 			// Override author when current author is low-confidence (from parent
 			// dir guess, not filename parsing). Parent-dir heuristic maxes out at

@@ -103,6 +103,12 @@ func ParseName(name string, parentName string) *models.ParsedInfo {
 		}
 	}
 
+	// Strip leading release-format tags like "[M4B] " or "[AudioBook] " —
+	// they'd otherwise become part of the author in "Author - Title" patterns.
+	// All-digit brackets ("[8] Title") are kept — they encode series position.
+	clean = regexp.MustCompile(`^\[[A-Za-z][A-Za-z0-9._ ]*\]\s*`).ReplaceAllString(clean, "")
+	clean = strings.TrimSpace(clean)
+
 	info := &models.ParsedInfo{
 		RawName: name,
 		Extra:   make(map[string]string),
@@ -184,6 +190,8 @@ func ParseName(name string, parentName string) *models.ParsedInfo {
 		// Strip (Audiobook) (Unabridged) etc from end
 		info.Title = regexp.MustCompile(`(?i)\s*\((?:Audiobook|Unabridged|Unabr)\)`).ReplaceAllString(info.Title, "")
 		info.Title = regexp.MustCompile(`(?i)\s*\{[^}]*\}`).ReplaceAllString(info.Title, "") // {narrator} tags
+		// Strip trailing "series" junk ("The Housemaid series" -> "The Housemaid")
+		info.Title = regexp.MustCompile(`(?i)\s+series$`).ReplaceAllString(info.Title, "")
 		info.Title = strings.TrimSpace(info.Title)
 	}
 
