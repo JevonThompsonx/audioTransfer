@@ -35,9 +35,10 @@ type Config struct {
 	LocalOnly     bool
 	Methods       []string
 	Parallel      int
-	VirusScan     bool // pre-transfer virus scan (default true)
-	VirusScanSkip bool // --no-virus-scan override
-	DeleteSource  bool // delete source files after successful transfer (opt-in; never in dry-run)
+	VirusScan     bool   // pre-transfer virus scan (default true)
+	VirusScanSkip bool   // --no-virus-scan override
+	DeleteSource  bool   // delete source files after successful transfer (opt-in; never in dry-run)
+	User          string // SSH user (defaults to transfer.DefaultUser when empty)
 }
 
 // CheckpointEntry holds the checkpoint state for a single book.
@@ -362,7 +363,7 @@ func RunTransfer(cfg Config) *models.TransferReport {
 		if method == "local" && cfg.DestDir != "" {
 			target = cfg.DestDir
 		}
-		client := transfer.NewClient(method, cfg.Host, target, cfg.SSHKeyPath, 22)
+		client := transfer.NewClient(method, cfg.Host, target, cfg.SSHKeyPath, 22, cfg.User)
 
 		fmt.Printf("\n  --- Trying method: %s ---\n", client.MethodName())
 		report.MethodsTried = append(report.MethodsTried, method)
@@ -568,8 +569,8 @@ func RunTransfer(cfg Config) *models.TransferReport {
 			localDir = cfg.TargetBase
 		}
 		fmt.Println("\n  All books organized locally.")
-		fmt.Printf("  Manual transfer:\n    rsync -avzP %s/ root@%s:%s/\n",
-			localDir, cfg.Host, cfg.TargetBase)
+		fmt.Printf("  Manual transfer:\n    rsync -avzP %s/ %s@%s:%s/\n",
+			localDir, transfer.EffectiveUser(cfg.User), cfg.Host, cfg.TargetBase)
 	}
 
 	return report
@@ -610,7 +611,7 @@ func verifyTransfers(report *models.TransferReport, cfg Config) {
 			if method == "local" && cfg.DestDir != "" {
 				target = cfg.DestDir
 			}
-			client = transfer.NewClient(method, cfg.Host, target, cfg.SSHKeyPath, 22)
+			client = transfer.NewClient(method, cfg.Host, target, cfg.SSHKeyPath, 22, cfg.User)
 			if !client.Connect() {
 				utils.Warn.Printf("  Could not connect to verify via %s; skipping remaining %s verifications", method, method)
 				continue
@@ -924,7 +925,7 @@ func runPreTransferScan(matched []bookWithID, cfg Config) ([]bookWithID, *viruss
 	}
 
 	// Create scanner
-	scanner := virusscan.NewScanner("local", cfg.Host, 22, "root", cfg.SSHKeyPath)
+	scanner := virusscan.NewScanner("local", cfg.Host, 22, transfer.EffectiveUser(cfg.User), cfg.SSHKeyPath)
 
 	// Run scan
 	report, err := scanner.ScanFiles(allPaths)

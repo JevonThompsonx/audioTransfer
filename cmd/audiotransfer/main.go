@@ -13,12 +13,17 @@ import (
 	"github.com/jevonx/audioTransfer/pkg/utils"
 )
 
+// user holds the parsed --user flag so package-level helpers (effectiveUser)
+// can read it after flag.Parse().
+var user *string
+
 func main() {
 	sourceDir := flag.String("source", mustExpand("~/qbit"), "Source directory with audiobooks")
 	destDir := flag.String("dest", mustExpand("~/qbit/organized"), "Destination directory (for local copy)")
 	host := flag.String("host", "roadman", "Remote hostname (default: roadman, the Audiobookshelf host)")
 	targetBase := flag.String("target", "/mnt/media/audiobooks", "Remote target base path (host path that maps into Audiobookshelf)")
 	sshKey := flag.String("ssh-key", "", "Path to SSH private key")
+	user = flag.String("user", "", "SSH user (default: audiobook; was root — now opt-in non-root)")
 	dryRun := flag.Bool("dry-run", false, "Preview plan without transferring")
 	dryRunShort := flag.Bool("n", false, "Preview plan (short)")
 	force := flag.Bool("force", false, "Skip confirmation prompts")
@@ -87,7 +92,7 @@ func main() {
 	if *localOnly {
 		fmt.Printf("Dest:   %s (local)\n", *destDir)
 	} else {
-		fmt.Printf("Target: %s@%s:%s\n", transfer.DefaultUser, *host, *targetBase)
+		fmt.Printf("Target: %s@%s:%s\n", effectiveUser(), *host, *targetBase)
 		fmt.Printf("Local fallback: %s\n", *destDir)
 	}
 
@@ -121,6 +126,7 @@ func main() {
 		Host:          *host,
 		TargetBase:    *targetBase,
 		SSHKeyPath:    *sshKey,
+		User:          *user,
 		DryRun:        *dryRun || *dryRunShort,
 		Verbose:       *verbose || *verboseShort,
 		Force:         *force || *forceShort,
@@ -145,6 +151,12 @@ func mustExpand(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+// effectiveUser returns the SSH user to print in the banner: the user-supplied
+// --user flag, or the non-root transfer.DefaultUser when unset.
+func effectiveUser() string {
+	return transfer.EffectiveUser(*user)
 }
 
 // resolveDeletion computes the effective deletion and verification intent from

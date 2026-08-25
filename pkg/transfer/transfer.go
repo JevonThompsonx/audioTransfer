@@ -21,7 +21,7 @@ import (
 const (
 	DefaultHost       = "roadman"
 	DefaultPort       = 22
-	DefaultUser       = "root"
+	DefaultUser       = "audiobook"
 	DefaultTargetBase = "/mnt/media/audiobooks"
 )
 
@@ -417,17 +417,29 @@ func (c *LocalClient) VerifyTransfer(remoteSubpath string) map[string]interface{
 	return result
 }
 
-// Factory function.
-func NewClient(method, host, targetBase, sshKeyPath string, port int) TransferClient {
+// EffectiveUser returns the SSH user to use: the explicit user if non-empty,
+// otherwise the package default (a non-root account). This guarantees callers
+// never silently fall back to root.
+func EffectiveUser(user string) string {
+	if user == "" {
+		return DefaultUser
+	}
+	return user
+}
+
+// Factory function. The user is passed through explicitly; callers must NOT
+// hardwire root. When user is empty, DefaultUser (a non-root account) is used.
+func NewClient(method, host, targetBase, sshKeyPath string, port int, user string) TransferClient {
+	if user == "" {
+		user = DefaultUser
+	}
 	switch method {
 	case "local":
 		return NewLocalClient(targetBase)
 	default:
-		return NewNativeSSHClient(host, port, DefaultUser, targetBase, sshKeyPath)
+		return NewNativeSSHClient(host, port, user, targetBase, sshKeyPath)
 	}
 }
-
-// --- Helpers ---
 
 func checkHostname(host string, port int) (bool, string) {
 	addrs, err := net.LookupHost(host)

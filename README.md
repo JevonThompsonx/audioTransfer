@@ -34,6 +34,7 @@ Options:
   --host, -H       Remote hostname (default: roadman)
   --target, -t     Remote target path (default: /mnt/media/audiobooks)
   --ssh-key, -k    SSH private key path (auto-detected if unset)
+  --user           SSH user (default: audiobook; was root — now opt-in non-root)
   --parallel, -P   Max concurrent transfers (default: 2)
   --dry-run, -n    Preview plan without transferring
   --local, -L      Local copy only, no SSH
