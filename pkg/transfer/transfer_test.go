@@ -162,15 +162,15 @@ func TestBuildSCPCmd_WithNonStandardPort(t *testing.T) {
 
 // StubTransferClient is a test double implementing TransferClient
 type StubTransferClient struct {
-	remoteExists   bool
+	remoteExists    bool
 	remoteTotalSize int64
 	connectionFails bool
 }
 
-func (s *StubTransferClient) MethodName() string { return "stub" }
+func (s *StubTransferClient) MethodName() string        { return "stub" }
 func (s *StubTransferClient) Preflight() (bool, string) { return true, "stub ready" }
-func (s *StubTransferClient) Connect() bool { return true }
-func (s *StubTransferClient) Disconnect() {}
+func (s *StubTransferClient) Connect() bool             { return true }
+func (s *StubTransferClient) Disconnect()               {}
 func (s *StubTransferClient) TransferBook(audioFiles, coverFiles []string, targetSubpath string) bool {
 	return true
 }

@@ -43,22 +43,22 @@ func TestParseName_StandardPatterns(t *testing.T) {
 		},
 		// Series Book N - Title pattern
 		{
-			name:            "SeriesBookNTitle",
-			filename:        "Sherlock Holmes - Cases, Book 5 - The Final Problem",
-			parentName:      "",
-			expectedAuthor:  "Sherlock Holmes",
-			expectedSeries:  "Cases",
-			expectedTitle:   "The Final Problem",
-			minConfidence:   90,
+			name:           "SeriesBookNTitle",
+			filename:       "Sherlock Holmes - Cases, Book 5 - The Final Problem",
+			parentName:     "",
+			expectedAuthor: "Sherlock Holmes",
+			expectedSeries: "Cases",
+			expectedTitle:  "The Final Problem",
+			minConfidence:  90,
 		},
 		// Series Book N pattern (no title)
 		{
-			name:            "SeriesBookN",
-			filename:        "J.K. Rowling - Harry Potter, Book 1",
-			parentName:      "",
-			expectedAuthor:  "J.K. Rowling",
-			expectedSeries:  "Harry Potter",
-			minConfidence:   80,
+			name:           "SeriesBookN",
+			filename:       "J.K. Rowling - Harry Potter, Book 1",
+			parentName:     "",
+			expectedAuthor: "J.K. Rowling",
+			expectedSeries: "Harry Potter",
+			minConfidence:  80,
 		},
 		// [NN] Title pattern
 		{
@@ -70,12 +70,12 @@ func TestParseName_StandardPatterns(t *testing.T) {
 		},
 		// Series NN - Title pattern (e.g., "Pern 01 - Dragonflight")
 		{
-			name:            "WordNumberTitle",
-			filename:        "Pern 01 - Dragonflight",
-			parentName:      "",
-			expectedSeries:  "Pern",
-			expectedTitle:   "Dragonflight",
-			minConfidence:   80,
+			name:           "WordNumberTitle",
+			filename:       "Pern 01 - Dragonflight",
+			parentName:     "",
+			expectedSeries: "Pern",
+			expectedTitle:  "Dragonflight",
+			minConfidence:  80,
 		},
 		// Series_Title -- Subtitle [ASIN]
 		{
@@ -235,26 +235,26 @@ func TestParseName_DisambiguationFix(t *testing.T) {
 	// organizer_test.go, but we verify the prerequisite here.
 
 	tests := []struct {
-		name              string
-		filename          string
-		parentName        string
-		expectAuthor      string
+		name                string
+		filename            string
+		parentName          string
+		expectAuthor        string
 		expectLowConfidence bool
 	}{
 		// Parent name guessed as author → should be extracted but low conf
 		{
-			name:               "ParentNameAsAuthorGuess",
-			filename:           "Hunter 01 Hunter's Way",
-			parentName:         "Hunter",
-			expectAuthor:       "Hunter", // Guessed from parent
+			name:                "ParentNameAsAuthorGuess",
+			filename:            "Hunter 01 Hunter's Way",
+			parentName:          "Hunter",
+			expectAuthor:        "Hunter", // Guessed from parent
 			expectLowConfidence: true,
 		},
 		// No author in filename, parent looks authorish
 		{
-			name:               "NoAuthorInFilename",
-			filename:           "Book 02 Title",
-			parentName:         "John Smith",
-			expectAuthor:       "John Smith",
+			name:                "NoAuthorInFilename",
+			filename:            "Book 02 Title",
+			parentName:          "John Smith",
+			expectAuthor:        "John Smith",
 			expectLowConfidence: true,
 		},
 	}
@@ -331,12 +331,12 @@ func TestParseName_QBitBracketedSeries(t *testing.T) {
 	// qBittorrent pattern: "Title [Series, Book N]" — the brackets must be
 	// stripped from the title and parsed into Series + SeriesPosition.
 	tests := []struct {
-		name            string
-		filename        string
-		expectedTitle   string
-		expectedSeries  string
-		expectedPos     float64
-		minConfidence   int
+		name           string
+		filename       string
+		expectedTitle  string
+		expectedSeries string
+		expectedPos    float64
+		minConfidence  int
 	}{
 		{
 			name:           "BracketedSeriesBook",
@@ -403,11 +403,11 @@ func TestParseName_NoBracketTrailingSeries(t *testing.T) {
 	// No-bracket variant: "Title Series, Book N" (e.g. qBittorrent's
 	// "House of Flame and Shadow Crescent City, Book 3").
 	tests := []struct {
-		name            string
-		filename        string
-		expectedTitle   string
-		expectedSeries  string
-		expectedPos     float64
+		name           string
+		filename       string
+		expectedTitle  string
+		expectedSeries string
+		expectedPos    float64
 	}{
 		{
 			name:           "TrailingSeriesBook",
@@ -498,9 +498,9 @@ func TestParseSeriesPosition(t *testing.T) {
 
 func TestParseASIN(t *testing.T) {
 	tests := []struct {
-		name          string
-		filename      string
-		expectedASIN  string
+		name         string
+		filename     string
+		expectedASIN string
 	}{
 		{
 			name:         "ASINAtEnd",

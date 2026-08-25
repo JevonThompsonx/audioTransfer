@@ -56,10 +56,10 @@ const (
 )
 
 var (
-	httpClient  = &http.Client{Timeout: 10 * time.Second}
-	cache       = make(map[string]*cachedEntry)
-	cacheMu     sync.RWMutex
-	cacheOnce   sync.Once
+	httpClient   = &http.Client{Timeout: 10 * time.Second}
+	cache        = make(map[string]*cachedEntry)
+	cacheMu      sync.RWMutex
+	cacheOnce    sync.Once
 	cacheLoadErr error
 )
 
@@ -162,8 +162,8 @@ type audibleCatalogProduct struct {
 }
 
 type audnexSeries struct {
-	Name     string          `json:"name"`
-	Position flexibleNumber  `json:"position"`
+	Name     string         `json:"name"`
+	Position flexibleNumber `json:"position"`
 }
 
 // flexibleNumber accepts both JSON numbers and numeric strings (audnex emits
