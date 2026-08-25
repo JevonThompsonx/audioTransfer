@@ -924,8 +924,8 @@ func runPreTransferScan(matched []bookWithID, cfg Config) ([]bookWithID, *viruss
 		return matched, nil
 	}
 
-	// Create scanner
-	scanner := virusscan.NewScanner("local", cfg.Host, 22, transfer.EffectiveUser(cfg.User), cfg.SSHKeyPath)
+	// Create scanner (local ClamAV; remote-SSH scanning was removed as dead code)
+	scanner := virusscan.NewScanner()
 
 	// Run scan
 	report, err := scanner.ScanFiles(allPaths)

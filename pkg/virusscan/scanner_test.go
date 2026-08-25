@@ -163,15 +163,8 @@ func TestFillCleanResults_KeepsErrors(t *testing.T) {
 }
 
 func TestNewScanner_Local(t *testing.T) {
-	s := NewScanner("local", "", 22, "", "")
+	s := NewScanner()
 	if s.MethodName() != "local-clamscan" && s.MethodName() != "local-clamdscan" {
-		t.Errorf("unexpected method: %s", s.MethodName())
-	}
-}
-
-func TestNewScanner_Remote(t *testing.T) {
-	s := NewScanner("remote", "100.116.138.103", 22, "root", "")
-	if s.MethodName() != "remote-clamscan" {
 		t.Errorf("unexpected method: %s", s.MethodName())
 	}
 }
