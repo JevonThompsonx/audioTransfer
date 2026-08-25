@@ -14,8 +14,11 @@ dependencies = []
 [project.optional-dependencies]
 ssh = ["paramiko"]
 
-[project.scripts]
-audiotransfer = "audiobook_transfer.cli:main"
+# NOTE: No [project.scripts] entry. The Python `audiobook_transfer` package is
+# frozen/legacy and historically shipped a `audiotransfer` console-script that
+# COLLIDED with the safe Go binary of the same name — `pip install` could
+# shadow the Go implementation (which has the chmod-777/root-default bugs
+# removed). The canonical `audiotransfer` entrypoint is the Go binary.
 
 [tool.setuptools.packages.find]
 include = ["audiobook_transfer*"]

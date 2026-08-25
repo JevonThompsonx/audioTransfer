@@ -89,4 +89,7 @@ class TempDir:
 
     def __exit__(self, *args):
         if self.path and self.path.exists():
-            shutil.rmtree(self.path, ignore_errors=True)
+            try:
+                shutil.rmtree(self.path)
+            except Exception as e:
+                logger.warning(f"  Failed to remove temp dir {self.path}: {e}")
