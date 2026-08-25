@@ -1,0 +1,27 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.go]
+indent_style = tab
+indent_size = 4
+# Reformat Go via gofmt; don't let editors second-guess it.
+max_line_length = off
+
+[*.{yml,yaml,json,md,py,toml,sh}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab
+
+[*.{png,jpg,jpeg,gif,ico,bin,exe}]
+charset = false
+end_of_line = false
+insert_final_newline = false
+trim_trailing_whitespace = false
