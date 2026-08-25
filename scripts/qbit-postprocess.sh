@@ -129,9 +129,11 @@ main() {
   done
   [ "$waited" -gt 0 ] && say "waited ${waited}s for downloads to idle"
 
-  # Run the pipeline (virus scan on, organize, move, chmod, delete source)
-  say "running: $AUDIOTRANSFER --source $SOURCE --local --dest $DEST --force --verify"
-  "$AUDIOTRANSFER" --source "$SOURCE" --local --dest "$DEST" --force --verify >> "$LOG" 2>&1
+  # Run the pipeline (virus scan on, organize, move, chmod, delete source).
+  # Deletion is explicit (--delete-source) AND gated on verification (--verify):
+  # audiotransfer now refuses to delete without --verify, so both must be present.
+  say "running: $AUDIOTRANSFER --source $SOURCE --local --dest $DEST --force --delete-source --verify"
+  "$AUDIOTRANSFER" --source "$SOURCE" --local --dest "$DEST" --force --delete-source --verify >> "$LOG" 2>&1
   local rc=$?
   say "audiotransfer exit=$rc"
   if [ "$rc" -ne 0 ]; then

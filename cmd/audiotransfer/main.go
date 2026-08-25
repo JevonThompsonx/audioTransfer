@@ -36,10 +36,16 @@ func main() {
 	parallelShort := flag.Int("P", 2, "Max concurrent transfers (short)")
 	virusScan := flag.Bool("virus-scan", true, "Pre-transfer ClamAV scan (default on)")
 	virusScanOff := flag.Bool("no-virus-scan", false, "Disable pre-transfer virus scan")
-	deleteSource := flag.Bool("delete-source", true, "Delete source files after successful transfer (default on; disable with --keep-source)")
+	deleteSource := flag.Bool("delete-source", false, "Delete source files after successful transfer (default OFF; requires --verify)")
 	keepSource := flag.Bool("keep-source", false, "Keep source files after transfer (disables --delete-source)")
 	keepSourceShort := flag.Bool("K", false, "Keep source files after transfer (short)")
 	flag.Parse()
+
+	deleteRequested, verifyRequested, err := resolveDeletion(*deleteSource, *keepSource, *keepSourceShort, *verify, *verifyShort)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		os.Exit(1)
+	}
 
 	// Handle short flags
 	if *dryRunShort {
@@ -119,13 +125,13 @@ func main() {
 		Verbose:       *verbose || *verboseShort,
 		Force:         *force || *forceShort,
 		Interactive:   isInteractive,
-		Verify:        *verify || *verifyShort,
+		Verify:        verifyRequested,
 		LocalOnly:     *localOnly || *localOnlyShort,
 		Methods:       methodList,
 		Parallel:      *parallel,
 		VirusScan:     *virusScan && !*virusScanOff,
 		VirusScanSkip: *virusScanOff,
-		DeleteSource:  *deleteSource && !(*keepSource || *keepSourceShort),
+		DeleteSource:  deleteRequested,
 	})
 
 	if report.Failed > 0 {
@@ -139,4 +145,17 @@ func mustExpand(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+// resolveDeletion computes the effective deletion and verification intent from
+// the raw flag values. Deletion is opt-in (default OFF) and MUST be paired
+// with verification: requesting deletion without --verify is refused so source
+// files are never deleted on scp success alone (silent data loss).
+func resolveDeletion(deleteSource, keepSource, keepSourceShort, verify, verifyShort bool) (deleteRequested, verifyRequested bool, err error) {
+	deleteRequested = deleteSource && !(keepSource || keepSourceShort)
+	verifyRequested = verify || verifyShort
+	if deleteRequested && !verifyRequested {
+		return false, false, fmt.Errorf("--delete-source requires --verify (refusing to delete unverified source files)")
+	}
+	return deleteRequested, verifyRequested, nil
 }
