@@ -37,7 +37,7 @@ tidy:
 	$(GO) mod tidy
 
 vuln:
-	$(GO) install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+	$(GO) install golang.org/x/vuln/cmd/govulncheck@latest
 	$(shell $(GO) env GOPATH)/bin/govulncheck ./...
 
 clean:
