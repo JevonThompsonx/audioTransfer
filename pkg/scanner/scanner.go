@@ -93,10 +93,10 @@ func ScanDirectory(cfg ScanDirConfiguration) []*models.BookSource {
 // to collect audio followed by two more full passes (hasAudioInDir +
 // hasAnySubBookDir) per directory — which re-walked the same tree repeatedly.
 type walkState struct {
-	audioFiles   []string
-	coverFiles   []string
-	hasDirect    bool // audio directly in this directory (not a subdir)
-	hasSubBook   bool // some subdirectory holds audio
+	audioFiles []string
+	coverFiles []string
+	hasDirect  bool // audio directly in this directory (not a subdir)
+	hasSubBook bool // some subdirectory holds audio
 }
 
 // collectWalkState performs a single recursive walk that gathers audio/cover
