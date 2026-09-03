@@ -1,5 +1,5 @@
 # Build artifacts
-audiotransfer
+/audiotransfer
 __pycache__/
 *.pyc
 *.pyo
@@ -13,6 +13,32 @@ build/
 
 # Go
 vendor/
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+*.cover
+
+# Go profiling output
+*.pprof
+cpu.prof
+mem.prof
+trace.out
+
+# Dependency directory (Go modules)
+# (vendor/ already ignored above)
+
+# Build output directory
+/bin/
+
 
 # IDE
 .idea/

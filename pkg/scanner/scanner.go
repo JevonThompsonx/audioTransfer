@@ -88,6 +88,41 @@ func ScanDirectory(cfg ScanDirConfiguration) []*models.BookSource {
 	return books
 }
 
+// walkState accumulates everything scanDirEntry needs to classify a directory
+// in a single recursive walk, replacing the previous pattern of one full WalkDir
+// to collect audio followed by two more full passes (hasAudioInDir +
+// hasAnySubBookDir) per directory — which re-walked the same tree repeatedly.
+type walkState struct {
+	audioFiles []string
+	coverFiles []string
+	hasDirect  bool // audio directly in this directory (not a subdir)
+	hasSubBook bool // some subdirectory holds audio
+}
+
+// collectWalkState performs a single recursive walk that gathers audio/cover
+// files and classifies the directory as flat or a container of sub-books.
+func collectWalkState(abs string) walkState {
+	var st walkState
+	_ = filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if utils.IsAudio(p) {
+			st.audioFiles = append(st.audioFiles, p)
+			// Direct audio = a file whose parent is the scanned root itself.
+			if filepath.Dir(p) == abs {
+				st.hasDirect = true
+			} else {
+				st.hasSubBook = true
+			}
+		} else if utils.IsCover(p) {
+			st.coverFiles = append(st.coverFiles, p)
+		}
+		return nil
+	})
+	return st
+}
+
 // scanDirEntry categorizes a directory entry as a book dir, series dir, or container.
 func scanDirEntry(abs, name, authorDir string, books *[]*models.BookSource) {
 	// Detect "Series Name (Author)" pattern — treat as a series container
@@ -98,32 +133,18 @@ func scanDirEntry(abs, name, authorDir string, books *[]*models.BookSource) {
 		return
 	}
 
-	// Collect all audio files recursively
-	var audioFiles, coverFiles []string
-	filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if utils.IsAudio(p) {
-			audioFiles = append(audioFiles, p)
-		} else if utils.IsCover(p) {
-			coverFiles = append(coverFiles, p)
-		}
-		return nil
-	})
+	// Single recursive walk gathers audio/covers and classifies the directory.
+	st := collectWalkState(abs)
 
-	if len(audioFiles) == 0 {
+	if len(st.audioFiles) == 0 {
 		return
 	}
 
-	sort.Strings(audioFiles)
-	sort.Strings(coverFiles)
+	sort.Strings(st.audioFiles)
+	sort.Strings(st.coverFiles)
 
-	// Determine if this is a flat book dir or a container with sub-books
-	hasDirectAudio := hasAudioInDir(abs)
-	hasSubBookDirs := hasAnySubBookDir(abs)
-
-	if (hasSubBookDirs && !hasDirectAudio) || (hasSubBookDirs && len(audioFiles) > 3) {
+	// Determine if this is a flat book dir or a container with sub-books.
+	if (st.hasSubBook && !st.hasDirect) || (st.hasSubBook && len(st.audioFiles) > 3) {
 		// Container: recurse into subdirectories
 		subBooks := scanContainerDir(abs, authorDir)
 		*books = append(*books, subBooks...)
@@ -135,8 +156,8 @@ func scanDirEntry(abs, name, authorDir string, books *[]*models.BookSource) {
 		// Project Hail Mary/" containing "Project Hail Mary.m4b") — pick the
 		// name that parses with higher confidence.
 		bookName := name
-		if hasDirectAudio && len(audioFiles) == 1 {
-			fileStem := strings.TrimSuffix(filepath.Base(audioFiles[0]), filepath.Ext(audioFiles[0]))
+		if st.hasDirect && len(st.audioFiles) == 1 {
+			fileStem := strings.TrimSuffix(filepath.Base(st.audioFiles[0]), filepath.Ext(st.audioFiles[0]))
 			dirInfo := parser.ParseName(name, "")
 			fileInfo := parser.ParseName(fileStem, "")
 			if fileInfo.Confidence > dirInfo.Confidence {
@@ -146,12 +167,12 @@ func scanDirEntry(abs, name, authorDir string, books *[]*models.BookSource) {
 		book := &models.BookSource{
 			Name:       bookName,
 			Path:       abs,
-			AudioFiles: audioFiles,
-			CoverFiles: coverFiles,
+			AudioFiles: st.audioFiles,
+			CoverFiles: st.coverFiles,
 			AuthorDir:  authorDir,
 		}
 		*books = append(*books, book)
-		utils.Debug.Printf("  Book dir: %s (%d audio, %d covers)", name, len(audioFiles), len(coverFiles))
+		utils.Debug.Printf("  Book dir: %s (%d audio, %d covers)", name, len(st.audioFiles), len(st.coverFiles))
 	}
 }
 
@@ -181,37 +202,6 @@ func isSeriesDir(name string) bool {
 		return false
 	}
 	return true
-}
-
-// hasAudioInDir checks if a directory contains audio files directly (not in subdirs).
-func hasAudioInDir(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if !e.IsDir() && utils.IsAudio(filepath.Join(dir, e.Name())) {
-			return true
-		}
-	}
-	return false
-}
-
-// hasAnySubBookDir checks if a directory has any subdirectory containing audio.
-func hasAnySubBookDir(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			subAbs := filepath.Join(dir, e.Name())
-			if hasAnyAudio(subAbs) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // hasAnyAudio checks if a directory tree contains any audio files.

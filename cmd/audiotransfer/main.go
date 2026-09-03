@@ -13,12 +13,17 @@ import (
 	"github.com/jevonx/audioTransfer/pkg/utils"
 )
 
+// user holds the parsed --user flag so package-level helpers (effectiveUser)
+// can read it after flag.Parse().
+var user *string
+
 func main() {
 	sourceDir := flag.String("source", mustExpand("~/qbit"), "Source directory with audiobooks")
 	destDir := flag.String("dest", mustExpand("~/qbit/organized"), "Destination directory (for local copy)")
 	host := flag.String("host", "roadman", "Remote hostname (default: roadman, the Audiobookshelf host)")
 	targetBase := flag.String("target", "/mnt/media/audiobooks", "Remote target base path (host path that maps into Audiobookshelf)")
 	sshKey := flag.String("ssh-key", "", "Path to SSH private key")
+	user = flag.String("user", "", "SSH user (default: audiobook; was root — now opt-in non-root)")
 	dryRun := flag.Bool("dry-run", false, "Preview plan without transferring")
 	dryRunShort := flag.Bool("n", false, "Preview plan (short)")
 	force := flag.Bool("force", false, "Skip confirmation prompts")
@@ -36,10 +41,16 @@ func main() {
 	parallelShort := flag.Int("P", 2, "Max concurrent transfers (short)")
 	virusScan := flag.Bool("virus-scan", true, "Pre-transfer ClamAV scan (default on)")
 	virusScanOff := flag.Bool("no-virus-scan", false, "Disable pre-transfer virus scan")
-	deleteSource := flag.Bool("delete-source", true, "Delete source files after successful transfer (default on; disable with --keep-source)")
+	deleteSource := flag.Bool("delete-source", false, "Delete source files after successful transfer (default OFF; requires --verify)")
 	keepSource := flag.Bool("keep-source", false, "Keep source files after transfer (disables --delete-source)")
 	keepSourceShort := flag.Bool("K", false, "Keep source files after transfer (short)")
 	flag.Parse()
+
+	deleteRequested, verifyRequested, err := resolveDeletion(*deleteSource, *keepSource, *keepSourceShort, *verify, *verifyShort)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		os.Exit(1)
+	}
 
 	// Handle short flags
 	if *dryRunShort {
@@ -81,7 +92,7 @@ func main() {
 	if *localOnly {
 		fmt.Printf("Dest:   %s (local)\n", *destDir)
 	} else {
-		fmt.Printf("Target: %s@%s:%s\n", transfer.DefaultUser, *host, *targetBase)
+		fmt.Printf("Target: %s@%s:%s\n", effectiveUser(), *host, *targetBase)
 		fmt.Printf("Local fallback: %s\n", *destDir)
 	}
 
@@ -115,17 +126,18 @@ func main() {
 		Host:          *host,
 		TargetBase:    *targetBase,
 		SSHKeyPath:    *sshKey,
+		User:          *user,
 		DryRun:        *dryRun || *dryRunShort,
 		Verbose:       *verbose || *verboseShort,
 		Force:         *force || *forceShort,
 		Interactive:   isInteractive,
-		Verify:        *verify || *verifyShort,
+		Verify:        verifyRequested,
 		LocalOnly:     *localOnly || *localOnlyShort,
 		Methods:       methodList,
 		Parallel:      *parallel,
 		VirusScan:     *virusScan && !*virusScanOff,
 		VirusScanSkip: *virusScanOff,
-		DeleteSource:  *deleteSource && !(*keepSource || *keepSourceShort),
+		DeleteSource:  deleteRequested,
 	})
 
 	if report.Failed > 0 {
@@ -139,4 +151,23 @@ func mustExpand(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+// effectiveUser returns the SSH user to print in the banner: the user-supplied
+// --user flag, or the non-root transfer.DefaultUser when unset.
+func effectiveUser() string {
+	return transfer.EffectiveUser(*user)
+}
+
+// resolveDeletion computes the effective deletion and verification intent from
+// the raw flag values. Deletion is opt-in (default OFF) and MUST be paired
+// with verification: requesting deletion without --verify is refused so source
+// files are never deleted on scp success alone (silent data loss).
+func resolveDeletion(deleteSource, keepSource, keepSourceShort, verify, verifyShort bool) (deleteRequested, verifyRequested bool, err error) {
+	deleteRequested = deleteSource && !(keepSource || keepSourceShort)
+	verifyRequested = verify || verifyShort
+	if deleteRequested && !verifyRequested {
+		return false, false, fmt.Errorf("--delete-source requires --verify (refusing to delete unverified source files)")
+	}
+	return deleteRequested, verifyRequested, nil
 }

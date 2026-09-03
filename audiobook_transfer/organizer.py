@@ -1,4 +1,5 @@
 """Orchestrates the full scan→parse→match→transfer pipeline."""
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -17,6 +18,18 @@ from .transfer import (
 from .utils import logger, sanitize_name
 
 _persistent_tmp_dir: Optional[Path] = None
+
+
+def _rmtree_onerror(func, path, exc_info):
+    """Error handler for shutil.rmtree that logs failures instead of
+    silently swallowing them (the old ignore_errors=True behavior)."""
+    import errno
+    try:
+        if func is os.path.islink or (func is os.remove and exc_info[1].errno == errno.ENOENT):
+            return  # race with another cleanup; nothing to do
+    except Exception:
+        pass
+    logger.warning(f"  rmtree error on {path}: {exc_info[1]}")
 
 
 def _copy_temp_files_to_persistent(books: List[BookSource]) -> List[BookSource]:
@@ -65,9 +78,9 @@ def _cleanup_persistent_temp():
         try:
             tmp_root = Path(tempfile.gettempdir()).resolve()
             if str(_persistent_tmp_dir.resolve()).startswith(str(tmp_root)):
-                shutil.rmtree(_persistent_tmp_dir, ignore_errors=True)
-        except Exception:
-            pass
+                shutil.rmtree(_persistent_tmp_dir, onerror=_rmtree_onerror)
+        except Exception as e:
+            logger.warning(f"  Failed to remove temp dir {_persistent_tmp_dir}: {e}")
 
 
 def _try_transfer_method(client, books_with_ids, report, method_name: str) -> bool:

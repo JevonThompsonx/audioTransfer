@@ -34,6 +34,7 @@ Options:
   --host, -H       Remote hostname (default: roadman)
   --target, -t     Remote target path (default: /mnt/media/audiobooks)
   --ssh-key, -k    SSH private key path (auto-detected if unset)
+  --user           SSH user (default: audiobook; was root — now opt-in non-root)
   --parallel, -P   Max concurrent transfers (default: 2)
   --dry-run, -n    Preview plan without transferring
   --local, -L      Local copy only, no SSH
@@ -42,7 +43,7 @@ Options:
   --verify, -V     Verify transfers after completion
   --verbose, -v    Debug output
   --methods, -m    Transfer methods in order: native-ssh,local
-  --delete-source  Delete source files after successful transfer (default on)
+  --delete-source  Delete source files after successful transfer (default OFF; requires --verify)
   --keep-source, -K  Keep source files after transfer (disables --delete-source)
 ```
 
@@ -66,11 +67,12 @@ Options:
 # Force mode: skip all prompts (for scripts)
 ./audiotransfer --source ~/qbit --force --local
 
-# Keep source files on this device (deletion is on by default)
+# Keep source files on this device (deletion is off by default)
 ./audiotransfer --source ~/qbit --keep-source
 ```
 
-> **Destructive by default:** `--delete-source` is ON by default — a book's local source files are deleted after a successful (post-verify) transfer. Use `--keep-source` to keep them, and `--dry-run` first to preview exactly what would be deleted.
+> **Source deletion is opt-in and verify-gated:** `--delete-source` is OFF by default. When you enable it, you MUST also pass `--verify` — the tool refuses to delete source files that have not been verified on the target, so a book is never deleted on scp success alone (silent data loss). Use `--keep-source` to retain them, and run `--dry-run` first to preview exactly what would be deleted.
+
 # Custom SSH key and port
 ./audiotransfer --source ~/qbit --ssh-key ~/.ssh/id_ed25519
 ```
@@ -222,12 +224,25 @@ audioTransfer/
 └── README.md
 ```
 
+## Related Repos & Deployment
+
+- `proxmox/audiobook-organizer/` is an **older, separate** Go organizer with
+  similar naming; do not confuse the two. This repo (audioTransfer) is the
+  canonical, actively maintained tool.
+- Roadman production automation: `scripts/qbit-postprocess.sh` (deployed to
+  `/usr/local/bin/` on roadman) chains ClamAV → audiotransfer → torrent
+  cleanup; see `docs/ROADMAN_QBIT_AUTOMATION.md` for the full pipeline.
+- Forgejo mirror: pushed through Aphrodite by the `forgejo-catchup` watchdog
+  when skellyshome is back online; this checkout intentionally carries only
+  `origin` (GitHub) plus an `aphrodite` fetch remote.
+
 ## Requirements
 
 ### Go version
 - Go 1.21+
 - Zero external Go dependencies (pure stdlib)
 - `ssh` + `scp` in PATH (for remote transfer)
+- Run the test suite with `go test ./...` (pkg/parser, pkg/organizer, pkg/scanner, pkg/metadata, pkg/transfer, pkg/virusscan all have unit tests)
 
 ### Python version
 - Python 3.8+
@@ -246,6 +261,8 @@ audioTransfer/
 
 ## Limitations
 
-- No tests yet (test suite planned)
 - No audio tag reading (mutagen equivalent)
 - No `paramiko` SSH backend implemented in Python version
+- The Python implementation has no test suite; only the Go implementation is tested
+
+> **Note:** the earlier "No tests yet" limitation is obsolete — the Go implementation now ships a unit-test suite across six packages (`go test ./...`).

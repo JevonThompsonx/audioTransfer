@@ -26,8 +26,13 @@ IDLE_WAIT_MAX=1800
 IDLE_POLL=30
 
 # audiotransfer needs $HOME for its checkpoint + metadata cache; systemd-run
-# wrapper contexts (timer, qBittorrent autorun) may not provide it.
-export HOME=/root
+# wrapper contexts (timer, qBittorrent autorun) may not provide it. Only set a
+# fallback when HOME is genuinely unset — never force /root, which would make
+# the pipeline write (and read) outside the real user's home and escalate
+# privilege assumptions.
+if [ -z "${HOME:-}" ]; then
+  export HOME=/root
+fi
 
 DL_STATES="downloading|forcedDL|metaDL|forcedMetaDL|stalledDL|checkingDL|queuedDL|allocatingDL"
 
@@ -47,6 +52,40 @@ if ! flock -n 9; then
   say "skip: another run in progress"
   exit 0
 fi
+
+# Enforce least-privilege on the credentials file. The qBittorrent WebUI
+# password lives in $CREDS (/root/.qbit-webui-password). If it is readable by
+# group or world, refuse to use it — a 0600 file owned by root is required.
+# We also fix the mode automatically when running as root and it is too open.
+check_creds_perms() {
+  if [ ! -f "$CREDS" ]; then
+    say "ERROR: credentials file $CREDS missing"
+    return 1
+  fi
+  # stat format: %a = mode octal, %U = owner.
+  local mode owner
+  mode=$(stat -c '%a' "$CREDS" 2>/dev/null || echo "000")
+  owner=$(stat -c '%U' "$CREDS" 2>/dev/null || echo "?")
+  case "$mode" in
+    600|640|700|000) ;;  # acceptable (000 = stat failed; handled below)
+    *)
+      if [ "$owner" = "root" ] && [ "$(id -u)" -eq 0 ]; then
+        say "creds $CREDS mode is $mode (group/world readable) — tightening to 0600"
+        chmod 600 "$CREDS" 2>/dev/null || { say "ERROR: cannot chmod $CREDS to 0600"; return 1; }
+      else
+        say "ERROR: credentials file $CREDS has unsafe mode $mode (must be 0600); refusing to read"
+        return 1
+      fi
+      ;;
+  esac
+  # Re-verify after any chmod.
+  mode=$(stat -c '%a' "$CREDS" 2>/dev/null || echo "000")
+  if [ "$mode" != "600" ]; then
+    say "ERROR: credentials file $CREDS mode $mode is not 0600 after hardening"
+    return 1
+  fi
+  return 0
+}
 
 api_login() {
   local user pass
@@ -107,6 +146,9 @@ main() {
 
   # Authenticate (qBittorrent may be restarting -> retry)
   local i ok=0
+  if ! check_creds_perms; then
+    exit 1
+  fi
   for i in $(seq 1 "$LOGIN_RETRIES"); do
     if api_login; then ok=1; break; fi
     say "login attempt $i/$LOGIN_RETRIES failed"
@@ -129,9 +171,11 @@ main() {
   done
   [ "$waited" -gt 0 ] && say "waited ${waited}s for downloads to idle"
 
-  # Run the pipeline (virus scan on, organize, move, chmod, delete source)
-  say "running: $AUDIOTRANSFER --source $SOURCE --local --dest $DEST --force --verify"
-  "$AUDIOTRANSFER" --source "$SOURCE" --local --dest "$DEST" --force --verify >> "$LOG" 2>&1
+  # Run the pipeline (virus scan on, organize, move, chmod, delete source).
+  # Deletion is explicit (--delete-source) AND gated on verification (--verify):
+  # audiotransfer now refuses to delete without --verify, so both must be present.
+  say "running: $AUDIOTRANSFER --source $SOURCE --local --dest $DEST --force --delete-source --verify"
+  "$AUDIOTRANSFER" --source "$SOURCE" --local --dest "$DEST" --force --delete-source --verify >> "$LOG" 2>&1
   local rc=$?
   say "audiotransfer exit=$rc"
   if [ "$rc" -ne 0 ]; then

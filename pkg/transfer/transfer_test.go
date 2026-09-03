@@ -162,15 +162,15 @@ func TestBuildSCPCmd_WithNonStandardPort(t *testing.T) {
 
 // StubTransferClient is a test double implementing TransferClient
 type StubTransferClient struct {
-	remoteExists   bool
+	remoteExists    bool
 	remoteTotalSize int64
 	connectionFails bool
 }
 
-func (s *StubTransferClient) MethodName() string { return "stub" }
+func (s *StubTransferClient) MethodName() string        { return "stub" }
 func (s *StubTransferClient) Preflight() (bool, string) { return true, "stub ready" }
-func (s *StubTransferClient) Connect() bool { return true }
-func (s *StubTransferClient) Disconnect() {}
+func (s *StubTransferClient) Connect() bool             { return true }
+func (s *StubTransferClient) Disconnect()               {}
 func (s *StubTransferClient) TransferBook(audioFiles, coverFiles []string, targetSubpath string) bool {
 	return true
 }
@@ -287,5 +287,50 @@ func TestVerifyTransfer_ConnectionError(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestNewClient_HonorsUser: regression for A2 — NewClient must use the
+// explicit user that is passed in, never hardwire root. When no user is
+// supplied, it falls back to the (non-root) DefaultUser.
+func TestNewClient_HonorsUser(t *testing.T) {
+	tests := []struct {
+		name     string
+		user     string
+		wantUser string
+	}{
+		{name: "explicit-user", user: "deploy", wantUser: "deploy"},
+		{name: "explicit-root-opt-in", user: "root", wantUser: "root"}, // allowed only when explicitly requested
+		{name: "empty-falls-back-to-default", user: "", wantUser: DefaultUser},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewClient("native-ssh", "host", "/t", "", 22, tt.user)
+			ssh, ok := c.(*NativeSSHClient)
+			if !ok {
+				t.Fatalf("expected *NativeSSHClient, got %T", c)
+			}
+			if ssh.User != tt.wantUser {
+				t.Errorf("ssh.User = %q, want %q", ssh.User, tt.wantUser)
+			}
+			if tt.user == "" && ssh.User == "root" {
+				t.Error("default user must not be root")
+			}
+		})
+	}
+}
+
+// TestEffectiveUser: regression for A2 — EffectiveUser returns the explicit
+// user, or the non-root DefaultUser when empty.
+func TestEffectiveUser(t *testing.T) {
+	if got := EffectiveUser("bob"); got != "bob" {
+		t.Errorf("EffectiveUser(\"bob\") = %q, want \"bob\"", got)
+	}
+	def := EffectiveUser("")
+	if def == "root" {
+		t.Error("EffectiveUser(\"\") must not return root")
+	}
+	if def != DefaultUser {
+		t.Errorf("EffectiveUser(\"\") = %q, want DefaultUser %q", def, DefaultUser)
 	}
 }

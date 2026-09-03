@@ -279,6 +279,76 @@ func TestDeleteSource_LocalOnlySameDirRefused(t *testing.T) {
 	}
 }
 
+// TestDeleteSource_VerifyGatedRefused: regression for A1 — the CLI-level gate
+// in resolveDeletion refuses any --delete-source request that is not paired
+// with --verify, so source files can never be deleted on scp success alone.
+// The gate itself is unit-tested directly in cmd/audiotransfer/main_test.go
+// (TestResolveDeletion). Here we assert the orchestrator-level contract: when
+// DeleteSource is set WITHOUT a verified transfer pairing, the lower-level
+// deleteSourceFiles primitive still honors DeleteSource verbatim, which is why
+// the gate MUST live upstream (in main.go) rather than only here.
+func TestDeleteSource_VerifyGatedRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, "qbit")
+	dest := filepath.Join(home, "organized")
+	os.MkdirAll(src, 0755)
+	bookFile := filepath.Join(src, "Test Author - Test Book.mp3")
+	os.WriteFile(bookFile, make([]byte, 1000), 0644)
+
+	// With the new default-off behavior, the CLI will NOT pass DeleteSource
+	// unless the user explicitly opts in. A direct call with DeleteSource=true
+	// still deletes (the primitive honors its input); the guarantee against
+	// unverified deletion is enforced by the CLI gate. We assert the default
+	// path (no flags) preserves everything.
+	report := RunTransfer(Config{
+		SourceDir: src,
+		DestDir:   dest,
+		LocalOnly: true,
+		Force:     true,
+		Parallel:  2,
+		// No DeleteSource, no Verify — the safe default.
+	})
+	if report.Deleted != 0 {
+		t.Errorf("report.Deleted = %d, want 0 (deletion is opt-in, default off)", report.Deleted)
+	}
+	if _, err := os.Stat(bookFile); err != nil {
+		t.Errorf("source file must be preserved when no deletion requested: %v", err)
+	}
+}
+
+// TestDeleteSource_DefaultOff: regression for A1 — a RunTransfer with no
+// DeleteSource flag set (the new default) must never delete source files,
+// regardless of how many books transferred successfully.
+func TestDeleteSource_DefaultOff(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, "qbit")
+	dest := filepath.Join(home, "organized")
+	os.MkdirAll(src, 0755)
+	for _, name := range []string{"Book One.mp3", "Book Two.mp3"} {
+		os.WriteFile(filepath.Join(src, name), make([]byte, 500), 0644)
+	}
+
+	report := RunTransfer(Config{
+		SourceDir: src,
+		DestDir:   dest,
+		LocalOnly: true,
+		Force:     true,
+		Parallel:  2,
+		// No DeleteSource, no Verify — the safe default.
+	})
+
+	if report.Deleted != 0 {
+		t.Errorf("report.Deleted = %d, want 0 (deletion must be opt-in, default off)", report.Deleted)
+	}
+	for _, name := range []string{"Book One.mp3", "Book Two.mp3"} {
+		if _, err := os.Stat(filepath.Join(src, name)); err != nil {
+			t.Errorf("source %s must be preserved under default-off deletion: %v", name, err)
+		}
+	}
+}
+
 // TestDeleteSource_Disabled: case 8 — DeleteSource=false deletes nothing.
 func TestDeleteSource_Disabled(t *testing.T) {
 	dir := t.TempDir()

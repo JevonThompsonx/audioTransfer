@@ -14,12 +14,11 @@ import (
 type LocalScanner struct {
 	BinPath   string
 	UseDaemon bool
-	Workers   int
 }
 
 // NewLocalScanner creates a local scanner, auto-detecting the best binary.
 func NewLocalScanner() *LocalScanner {
-	s := &LocalScanner{Workers: 4}
+	s := &LocalScanner{}
 	s.detectBinary()
 	return s
 }

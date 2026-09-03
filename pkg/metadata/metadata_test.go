@@ -293,7 +293,10 @@ func TestTitleCase(t *testing.T) {
 }
 
 func TestYearFromDate(t *testing.T) {
-	tests := []struct{ in string; want int }{
+	tests := []struct {
+		in   string
+		want int
+	}{
 		{"2021-06-01", 2021},
 		{"2010", 2010},
 		{"", 0},
@@ -306,7 +309,6 @@ func TestYearFromDate(t *testing.T) {
 		}
 	}
 }
-
 
 func TestCacheKeyGeneration(t *testing.T) {
 	// Test that buildCacheKey generates consistent, normalized keys
