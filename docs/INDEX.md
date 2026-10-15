@@ -25,5 +25,7 @@
 ## Repo notes (not in docs/)
 
 - Root `README.md`: Go (recommended, actively maintained) vs Python `audiobook_transfer/` (legacy, frozen).
+- Root `AGENTS.md`: commands, defaults, flag gotchas and constraints for agents working in this repo.
+- `Makefile`: `build` / `test` / `lint` / `tidy` / `vuln` / `clean` — mirrors `.github/workflows/ci.yml`.
 - `--delete-source` is OFF by default and requires `--verify` (verify-gated, never deletes on scp success alone).
 - Remotes: `origin` (GitHub, canonical push target) + `aphrodite` (fetch remote for the Aphrodite checkout; do not push here unless owner names it).

@@ -8,41 +8,58 @@ Audiobook organizer and transfer tool for Audiobookshelf. Combines the best of t
 
 ## Quick Start
 
+Requires the Go toolchain declared in `go.mod` (Go 1.26.7+); zero external Go
+dependencies (pure stdlib).
+
 ### Go (recommended — zero external dependencies)
 ```bash
-go build -o audiotransfer ./cmd/audiotransfer/
+make build                            # or: go build -o audiotransfer ./cmd/audiotransfer/
 ./audiotransfer --source ~/qbit --dry-run      # preview only
 ./audiotransfer --source ~/qbit --local         # organize locally
 ./audiotransfer --source ~/qbit                 # organize + transfer via SSH
 ```
+
+`make build` writes `bin/audiotransfer`; the manual `go build` above writes
+`./audiotransfer` in the current directory. Both are the same binary.
 
 ### Python
 ```bash
 python3 -m audiobook_transfer.cli --source ~/qbit --dry-run
 # or install:
 pip install -e .
-audiotransfer --source ~/qbit --dry-run
 ```
 
+> **No console script:** `pyproject.toml` deliberately ships no `[project.scripts]`
+> entry, so `pip install -e .` does **not** create an `audiotransfer` command —
+> the only `audiotransfer` binary is the Go one. Invoke the legacy CLI as
+> `python3 -m audiobook_transfer.cli`.
+
 ## Usage
+
+Flags below are the **Go** CLI (the recommended implementation). The legacy
+Python CLI accepts the same long flags plus short aliases (`-s`, `-H`, `-t`,
+`-k`, `-m`, `-q`, `-l`) that the Go binary does **not** define.
 
 ```
 audiotransfer [options]
 
 Options:
-  --source, -s     Source directory (default: ~/qbit)
-  --host, -H       Remote hostname (default: roadman)
-  --target, -t     Remote target path (default: /mnt/media/audiobooks)
-  --ssh-key, -k    SSH private key path (auto-detected if unset)
+  --source         Source directory (default: ~/qbit)
+  --dest           Local destination directory (default: ~/qbit/organized) — used by --local and as the SSH fallback target
+  --host           Remote hostname (default: roadman)
+  --target         Remote target path (default: /mnt/media/audiobooks)
+  --ssh-key        SSH private key path (auto-detected if unset)
   --user           SSH user (default: audiobook; was root — now opt-in non-root)
-  --parallel, -P   Max concurrent transfers (default: 2)
+  --parallel, -P   Max concurrent transfers (default: 2; clamped to 1–8, out-of-range resets to 2)
   --dry-run, -n    Preview plan without transferring
   --local, -L      Local copy only, no SSH
   --force, -f      Skip confirmation prompts
   --interactive, -i  Confirm each book match individually
   --verify, -V     Verify transfers after completion
   --verbose, -v    Debug output
-  --methods, -m    Transfer methods in order: native-ssh,local
+  --virus-scan     Pre-transfer ClamAV scan (default on; clamdscan when a daemon is responsive, else clamscan)
+  --no-virus-scan  Disable the pre-transfer virus scan
+  --methods        Transfer methods in order: native-ssh,local
   --delete-source  Delete source files after successful transfer (default OFF; requires --verify)
   --keep-source, -K  Keep source files after transfer (disables --delete-source)
 ```
@@ -56,7 +73,7 @@ Options:
 ./audiotransfer --source ~/Downloads/audiobooks --dry-run
 
 # Local only: organize files into Author/Series/Title structure locally
-./audiotransfer --source ~/qbit --local --target ~/organized
+./audiotransfer --source ~/qbit --local --dest ~/organized
 
 # Full transfer: organize and send to server via SSH
 ./audiotransfer --source ~/qbit --host roadman --verify
@@ -69,18 +86,22 @@ Options:
 
 # Keep source files on this device (deletion is off by default)
 ./audiotransfer --source ~/qbit --keep-source
+
+# Skip the pre-transfer ClamAV scan (on by default)
+./audiotransfer --source ~/qbit --no-virus-scan
 ```
 
 > **Source deletion is opt-in and verify-gated:** `--delete-source` is OFF by default. When you enable it, you MUST also pass `--verify` — the tool refuses to delete source files that have not been verified on the target, so a book is never deleted on scp success alone (silent data loss). Use `--keep-source` to retain them, and run `--dry-run` first to preview exactly what would be deleted.
 
 # Custom SSH key and port
+```bash
 ./audiotransfer --source ~/qbit --ssh-key ~/.ssh/id_ed25519
 ```
 
 ## Architecture
 
 ```
-Source dir ──→ Scan ──→ Parse ──→ [Provider chain] ──→ Match ──→ Transfer + metadata.json
+Source dir ──→ Scan ──→ Parse ──→ [Provider chain] ──→ Match ──→ Virus scan ──→ Transfer + metadata.json
                                     Audible → iTunes → OpenLibrary
 ```
 
@@ -90,9 +111,10 @@ Source dir ──→ Scan ──→ Parse ──→ [Provider chain] ──→ M
 |-------|-------------|
 | **1. Scan** | Recursively discovers audiobook files (.m4b, .mp3, .m4a, .flac, etc.), cover art (.jpg, .png), and extracts .zip archives |
 | **2. Parse** | Hybrid regex + heuristic engine extracts author, title, series, series position from filenames and parent directories |
-| **3. Match** | Resolves canonical book identity via the metadata provider chain (below) with strict scored matching |
-| **4. Transfer** | Copies files to target via SSH/SCP (native) or local file copy; falls back through methods on failure |
-| **5. metadata.json** | A full ABS-compatible `metadata.json` (title, authors, narrators, series, tags, genres, description, publisher, year, language, ISBN, ASIN) is written into every organized book folder so Audiobookshelf scans new books fully matched — no more empty tags/descriptions |
+| **3. Match** | Resolves canonical book identity via the metadata provider chain (below) with strict scored matching; books already completed in an earlier run are restored from the checkpoint and skipped |
+| **4. Virus scan** | Pre-transfer ClamAV scan (`clamdscan` when the daemon is responsive, else `clamscan`); infected or unscannable books are held back from transfer. On by default — disable with `--no-virus-scan` |
+| **5. Transfer** | Copies files to target via SSH/SCP (native) or local file copy; falls back through methods on failure, then verifies when `--verify` is set |
+| **metadata.json** | A full ABS-compatible `metadata.json` (title, authors, narrators, series, tags, genres, description, publisher, year, language, ISBN, ASIN) is written into every organized book folder so Audiobookshelf scans new books fully matched — no more empty tags/descriptions |
 
 ## Metadata Provider Chain
 
@@ -199,15 +221,17 @@ OpenLibrary metadata lookups are cached persistently at `~/.audiotransfer/metada
 
 ```
 audioTransfer/
-├── cmd/audiotransfer/main.go      Go CLI entry point
+├── cmd/audiotransfer/main.go      Go CLI entry point (flag definitions, delete/verify resolution)
 ├── pkg/
 │   ├── models/models.go           Shared data types (BookSource, ParsedInfo, BookIdentity, TransferReport)
 │   ├── parser/parser.go           Hybrid filename parser (regex + heuristic)
-│   ├── scanner/scanner.go         Recursive directory scanner with zip extraction
-│   ├── metadata/metadata.go       OpenLibrary Search API client (cached, free, no key required)
-│   ├── transfer/transfer.go       NativeSSHClient + LocalClient with fallback orchestration
-│   ├── organizer/organizer.go     Pipeline orchestration (scan→parse→match→transfer)
-│   └── utils/utils.go             File type helpers, temp dir, logging, path expansion
+│   ├── scanner/scanner.go         Recursive directory scanner with zip extraction (single-walk)
+│   ├── metadata/metadata.go       Metadata client: Audible→audnex.us→iTunes→OpenLibrary chain (cached, 30-day TTL)
+│   ├── transfer/transfer.go       NativeSSHClient + LocalClient with fallback orchestration (DefaultUser = audiobook)
+│   ├── virusscan/                 Pre-transfer ClamAV scan (clamdscan when responsive, else clamscan)
+│   ├── organizer/organizer.go     Pipeline orchestration (scan→parse→match→virusscan→transfer)
+│   ├── organizer/delete_source.go Delete-source gating (requires verification)
+│   └── utils/utils.go             File type helpers, temp dir, logging, ~/.audiotransfer config dir
 ├── audiobook_transfer/            Python implementation — LEGACY, frozen, do not use for new work
 │   ├── __init__.py
 │   ├── cli.py                     argparse CLI with all flags
@@ -219,8 +243,14 @@ audioTransfer/
 │   ├── transfer.py                NativeSSHTransferClient + LocalTransferClient
 │   ├── organizer.py               Pipeline orchestration
 │   └── utils.py                   File helpers, logging, temp dir, sanitize
+├── docs/                          Planning, audit and operations notes — start at docs/INDEX.md
+├── scripts/qbit-postprocess.sh    roadman qBittorrent → Audiobookshelf post-process hook
+├── Makefile                       build / test / lint / tidy / vuln / clean (mirrors CI)
+├── bin/                           make build output (audiotransfer)
 ├── go.mod
-├── pyproject.toml
+├── pyproject.toml                 Python package metadata (no console_scripts by design)
+├── .github/workflows/ci.yml       CI gates: gofmt, vet, test, build, govulncheck
+├── AGENTS.md                       Agent-facing guide (conventions, constraints, gotchas)
 └── README.md
 ```
 
@@ -236,13 +266,21 @@ audioTransfer/
   when skellyshome is back online; this checkout intentionally carries only
   `origin` (GitHub) plus an `aphrodite` fetch remote.
 
+## Documentation
+
+- [`docs/INDEX.md`](docs/INDEX.md) — index of all 11 docs files (planning, library audits, roadman operations)
+- [`docs/TODO_MODERNIZATION.md`](docs/TODO_MODERNIZATION.md) — modernization audit backlog, Wave 1 / Wave 2 status
+- [`docs/ROADMAN_QBIT_AUTOMATION.md`](docs/ROADMAN_QBIT_AUTOMATION.md) — the roadman qBittorrent → Audiobookshelf automation pipeline
+- [`AGENTS.md`](AGENTS.md) — agent-facing conventions, commands and constraints
+
 ## Requirements
 
 ### Go version
-- Go 1.21+
-- Zero external Go dependencies (pure stdlib)
+- Go 1.26.7+ (toolchain declared in `go.mod`)
+- Zero external Go dependencies (pure stdlib; no `go.sum` needed)
 - `ssh` + `scp` in PATH (for remote transfer)
-- Run the test suite with `go test ./...` (pkg/parser, pkg/organizer, pkg/scanner, pkg/metadata, pkg/transfer, pkg/virusscan all have unit tests)
+- Run the test suite with `go test ./...` (or `make test`) — `cmd/audiotransfer`, `pkg/parser`, `pkg/organizer`, `pkg/scanner`, `pkg/metadata`, `pkg/transfer`, `pkg/virusscan` all have unit tests
+- `make build|test|lint|tidy|vuln|clean` mirror the CI gates (`.github/workflows/ci.yml`: gofmt, vet, test, build, govulncheck)
 
 ### Python version
 - Python 3.8+
@@ -255,7 +293,7 @@ audioTransfer/
 - **Path traversal protection** — validates and sanitizes all paths before file operations
 - **Zip slip protection** — extracted zip contents checked against temp directory boundaries
 - **OpenLibrary API** — free, no API key required, read-only queries
-- **Default user** — SSH defaults to `root`; configure via `--host` (e.g., `user@host` syntax in `~/.ssh/config`)
+- **Default user** — SSH defaults to the non-root `audiobook` account (`transfer.DefaultUser` in `pkg/transfer/transfer.go`); `root` is opt-in via `--user root` or a `User` line in `~/.ssh/config`
 - **Host key checking** — uses `StrictHostKeyChecking=accept-new` on first connection; add host to `~/.ssh/known_hosts` before trusted use
 - **File permissions** — transferred files/directories are set to `644`/`755` (owner read-write, group/other read-only) rather than world-writable. This was previously `777`; verified unnecessary since the reference Audiobookshelf deployment runs its container process as root (root bypasses Unix permission checks entirely), so tightening this is a pure security improvement with no functionality loss on that setup. If you're running Audiobookshelf as a non-root user via PUID/PGID and it can't read transferred files, you may need to adjust ownership/group membership on the target host rather than reverting to `777`.
 

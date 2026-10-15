@@ -14,8 +14,8 @@
 ## 🔴 SECURITY
 
 - [ ] **P0 · S · High** — Python `transfer.py` sets world-writable `chmod 777` / `chmod -R 777` (lines 226–230, 351–359) for both local and remote targets. Go version correctly uses `755`/`644`. Frozen code, but if ever reused it's a privilege/integrity risk on a shared media box. Fix or delete the legacy impl (see DX-2).
-- [ ] **P1 · S · Med** — Default SSH user is `root` (`pkg/transfer/transfer.go:24` `DefaultUser = "root"`, `audiobook_transfer/transfer.py:16` `DEFAULT_USER = "root"`). Connecting as root to copy media is unnecessary blast radius. Default to a non-privileged user; require explicit opt-in for root.
-- [ ] **P1 · M · Med** — `scripts/qbit-postprocess.sh` reads plaintext qBittorrent creds from `/root/.qbit-webui-password` (line 53–54). No perms check / no fail-closed if world-readable. Add `chmod 600` enforcement + a presence/perms guard, or move to a secrets manager.
+- [x] **P1 · S · Med — DONE for Go (verified 2026-10-15)** — Default SSH user was `root`. Go now sets `DefaultUser = "audiobook"` (`pkg/transfer/transfer.go`) with a `--user` flag in `cmd/audiotransfer/main.go`; root is opt-in. The frozen `audiobook_transfer/transfer.py` still defaults to root (legacy, reference only).
+- [x] **P1 · M · Med — DONE (perms guard verified 2026-10-15)** — `scripts/qbit-postprocess.sh` reads plaintext qBittorrent creds from `/root/.qbit-webui-password`. `check_creds_perms()` now refuses group/world-readable creds and chmods to 0600 when running as root; remaining follow-up is moving the credential out of a plaintext file entirely.
 - [ ] **P2 · S · Low** — `StrictHostKeyChecking=accept-new` is used everywhere (transfer.go, virusscan/remote.go). First-run TOFU is acceptable, but SSH host keys are never pinned/persisted for verification across runs — consider a known_hosts pin for the production host.
 - [ ] **P2 · S · Low** — Path-traversal guard `validateSubpath` (transfer.go:473) only checks `filepath.Clean` output for literal `".."`; an absolute path is silently stripped of its leading `/`. Adequate but undocumented; add a comment + a unit test asserting `/etc/passwd`-style inputs are rejected.
 
@@ -31,7 +31,7 @@
 ## 🛠 QUALITY OF LIFE / DX
 
 - [x] **P0 · S · High — DONE in Wave 1** — **No CI at all** (no `.github/workflows`, Makefile, or pre-commit). `gofmt -l` flagged 4 files (`metadata.go`, `metadata_test.go`, `parser_test.go`, `transfer_test.go`). **Resolved by Wave 1:** `f5982ab` (`gofmt -w .`) + `e539b97` (added `.github/workflows/ci.yml` running gofmt-vet-test-build). Verified `gofmt -l .` clean post-Wave-1.
-- [ ] **P0 · S · High** — **README architecture section is stale**: `README.md:205` still says `metadata/metadata.go` is "OpenLibrary Search API client" only, and omits virus-scan, the Audible→audnex→iTunes→OpenLibrary provider chain, checkpoint resume, `--delete-source`, and parallel transfers. Update the diagram + pipeline description to match current code.
+- [x] **P0 · S · High — DONE 2026-10-15** — **README architecture section** was stale: `README.md:205` described `metadata/metadata.go` as an "OpenLibrary Search API client" only and omitted virus-scan, the Audible/audnex/iTunes/OpenLibrary provider chain, checkpoint resume, `--delete-source`, and parallel transfers. Diagram + pipeline description now match the code (Phases 1-5 incl. virus scan).
 - [ ] **P1 · M · Med** — **Two divergent implementations** of the same tool (Go canonical + Python legacy). They have already drifted: Python lacks virus-scan, checkpoint/resume, delete-source, parallelism, and the rich metadata chain (only OpenLibrary), and still has the `chmod 777` bug. Decide: delete the Python package (recommended — it's marked frozen) or lock it behind a warning + CI that fails if it diverges.
 - [ ] **P1 · M · Med** — **Dependency hygiene**: `go.mod` declares only `go 1.21` with **zero external requires** (pure stdlib — good for supply chain), but `go.sum` is absent and `go mod tidy` was never run; `go.mod` is also behind the installed toolchain (1.23.4). Bump `go 1.23`, run `go mod tidy`, and consider `go mod verify` in CI. Python `pyproject.toml` pins `requires-python = ">=3.8"` (3.8 is EOL) and `paramiko` is unpinned — bump to `>=3.10` and pin optional deps.
 - [ ] **P1 · S · Med** — **Hardcoded environment constants** baked into source: `roadman`, `/mnt/media/audiobooks`, `/mnt/media/qbit`, qBittorrent `127.0.0.1:8081`, `CREDS=/root/.qbit-webui-password`. These belong in env vars / a config file with sane defaults, so the tool isn't roadman-only. (The `qbit-postprocess.sh` script is even more environment-coupled.)
@@ -41,6 +41,7 @@
 
 ## Summary counts
 - **P0**: 3 (legacy chmod 777, no CI, stale README) · **P1**: 7 · **P2**: 8 · **Total**: 18.
+- *(Counts are the 2026-08-24 audit baseline. Current state is tracked in the Wave 2 Queue below — only items 11 and 13 remain open as of 2026-10-15.)*
 - **Biggest leverage**: add CI + gofmt/lint gate (catches the 4 unformatted files immediately), reconcile/delete the legacy Python impl, and fix the unused `Workers` + redundant scanner walks for real speed wins.
 
 ---
@@ -65,13 +66,14 @@
 
 ## 🔧 Corrections from Baseline + Second Audit (2026-08-24)
 
-These refine the original audit; apply before/while doing Wave 2:
+These refine the original audit; apply before/while doing Wave 2.
+**Resolution status (2026-10-15):** see the Wave 2 Queue at the bottom — items marked `[x]` there are verified landed on `main`.
 
 - **`copyFile` close-error claim is FALSE (was P2 EFF).** `copyFile` returns `out.Close()` (transfer.go:501); only a redundant `defer out.Close()` at :496 remains. Action: drop the stray `defer`, do **not** add a missing check. *(Baseline + Second Audit both confirmed; audit item was OVERSTATED.)*
 - **Remote per-dir SSH clamscan batching targets DEAD CODE (was P1 EFF).** `RemoteScanner` is never invoked — `organizer.RunTransfer` hardcodes `NewScanner("local", …)` (organizer.go:927). Reframe as **"delete `RemoteScanner` + dead `escapePath`"**, not "optimize it."
 - **`root` default (was P1 SEC) is actually HARDWIRED.** No `--user` flag exists; `transfer.NewClient` always injects `DefaultUser="root"`. Raise to: *add `--user` flag, default non-root, stop hardwiring root.* (Second Audit S2, High.)
-- **NEW High — `--delete-source` ON by default, `--verify` OFF by default** (main.go:39 vs :37). Contradicts `TRANSFER_FIXES_PLAN.md §3.1` ("opt-in only"). Ad-hoc runs delete local source on unverified scp success → data-loss posture. (Second Audit S1/R1, High — must fix before any merge.)
-- **NEW Med — Python console-script `audiotransfer` collides with the Go binary** (`pyproject.toml` script name == Go `cmd/audiotransfer`). `pip install` shadows the safe Go impl with the chmod-777/root Python impl. Rename Python entrypoint or drop the script. (Second Audit S6/D4.)
+- [x] **RESOLVED — `--delete-source` is OFF by default and requires `--verify`** (`cmd/audiotransfer/main.go:44` + `resolveDeletion` refuses deletion without verification). Contradicted `TRANSFER_FIXES_PLAN.md §3.1` ("opt-in only") at audit time; fixed since. (Second Audit S1/R1, High.)
+- [x] **RESOLVED — Python console-script collision removed.** `pyproject.toml` ships no `[project.scripts]`, so `pip install` can no longer shadow the Go binary; the legacy CLI is `python3 -m audiobook_transfer.cli`. (Second Audit S6/D4.)
 - **NEW Low — `shutil.rmtree(…, ignore_errors=True)`** silently swallows deletion errors (organizer.py:68, utils.py:91). (Second Audit S7.)
 - **Scanner multi-walk is EXPONENTIAL, not constant** (was P1 EFF, understated). Nested `Author/Series/Title` trees re-walk subtrees repeatedly. Sharpen fix to "single stateful WalkDir." (Second Audit R3.)
 - **delete-source safety IS unit-tested** (`delete_source_test.go`). Audit's "no tests for models/utils/factory/parsers" is accurate, but the delete-safety path is covered — audit was partially inaccurate there. (Second Audit D10.)
@@ -79,18 +81,22 @@ These refine the original audit; apply before/while doing Wave 2:
 
 ---
 
-## 🌊 Wave 2 Queue (priority order)
+## 🌊 Wave 2 Queue (priority order) — status verified 2026-10-15 against `main` @923959b
 
-1. **HIGH — Flip `--delete-source` default to OFF**; require `--verify` when deleting; make the qBittorrent hook explicit. (S1/R1)
-2. **HIGH — Add `--user` flag; default non-root; stop hardwiring `DefaultUser`** into `NewClient`. (S2)
-3. **MED — Rename/remove Python `audiotransfer` console-script** so it can't shadow the Go binary. (S6/D4)
-4. **MED — `go mod edit -go=1.23` + `go mod tidy`**; keep `go mod verify` in CI. (P1 DX)
-5. **MED — Remove dead `Workers` field** or implement the pool in the local scanner. (R2/P1)
-6. **MED — Collapse scanner multi-walk** to a single stateful WalkDir. (R3/P2 understated)
-7. **MED — Delete `RemoteScanner` + duplicated `escape*` helpers** (dead code). (R4/D9)
-8. **MED — Harden `qbit-postprocess.sh`** creds perms (`chmod 600` enforcement + guard) + `HOME` handling. (S4)
-9. **MED — Decide Python fate** (delete recommended) + fix README architecture bullet. (D2/D3)
-10. **LOW — `shutil.rmtree ignore_errors=True`** fix (Python temp cleanup). (S7)
-11. **LOW — Extract shared config** for hardcoded env constants (`roadman`, `/mnt/media/*`, creds path). (D6)
-12. **LOW — Add `Makefile`/`justfile`**, consolidate `docs/` sprawl into a `STATUS.md`. (D7/D8)
-13. **LOW — Add `models`/`utils`/`factory`/`parsers` unit tests** + one e2e dry-run. (D11)
+Items flagged "still open" under Wave 1 Status above are resolved here unless marked OPEN.
+
+1. [x] **DONE** — `--delete-source` default OFF + requires `--verify` (`cmd/audiotransfer/main.go:44`; `resolveDeletion` refuses deletion without verification). (S1/R1)
+2. [x] **DONE** — `--user` flag added; default is the non-root `audiobook` account (`pkg/transfer/transfer.go` `DefaultUser` + `EffectiveUser`). (S2)
+3. [x] **DONE** — no `[project.scripts]` in `pyproject.toml`; the legacy CLI runs only via `python3 -m audiobook_transfer.cli`. (S6/D4)
+4. [x] **DONE** — `go.mod` now declares `go 1.26.7`; pure stdlib, no `go.sum` needed; CI runs `go mod tidy` and fails when not tidy. (P1 DX)
+5. [x] **DONE** — dead `Workers` field removed from the virus-scan scanner. (R2/P1)
+6. [x] **DONE** — single stateful walk (`collectWalkState` in `pkg/scanner/scanner.go`) replaces the multi-pass scan. (R3/P2 understated)
+7. [x] **DONE** — `RemoteScanner` + duplicated `escape*` helpers deleted (commit `bafe028`). (R4/D9)
+8. [x] **DONE** — `check_creds_perms()` in `scripts/qbit-postprocess.sh` enforces 0600 and refuses group/world-readable creds. (S4)
+9. [~] **PARTIAL** — README architecture/diagram, provider chain, virus-scan phase, `--user`, `--dest`, Go version and project layout refreshed 2026-10-15; the Python impl is deliberately kept as frozen reference rather than deleted. (D2/D3)
+10. [x] **DONE** — `shutil.rmtree(…, ignore_errors=True)` removed from the legacy Python temp cleanup. (S7)
+11. [ ] **OPEN** — hardcoded env constants remain in `pkg/transfer/transfer.go` (`DefaultHost`, `DefaultTargetBase`) and `scripts/qbit-postprocess.sh`. (D6)
+12. [~] **PARTIAL** — `Makefile` (build/test/lint/tidy/vuln/clean) exists and mirrors CI; `docs/` is still 11 audit/plan files indexed by `docs/INDEX.md` instead of one consolidated `STATUS.md`. (D7/D8)
+13. [ ] **OPEN** — still no tests for `models`, `utils`, `virusscan/factory.go`, `virusscan/parsers.go`, and no e2e dry-run test. (D11)
+
+**Still-open count (2026-10-15):** items 11 and 13 only. The rest of the audit backlog has landed on `main`.
